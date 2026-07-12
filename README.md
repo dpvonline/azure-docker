@@ -57,7 +57,8 @@ Automatisierung (nur Platzhalter-Skript unter `scripts/update-containers.sh`).
   setzt voraus, dass der Postgres-Container die Azure Instance Metadata Service (IMDS,
   `169.254.169.254`) über Docker's Bridge-Netzwerk erreichen kann. Das funktioniert auf
   Azure-VMs i. d. R., sollte aber nach dem ersten Deploy mit
-  `docker compose exec postgres pgbackrest --stanza=main check` verifiziert werden. Falls
+  `docker compose exec --user postgres postgres pgbackrest --stanza=main --config=/etc/pgbackrest/pgbackrest.conf check`
+  verifiziert werden. Falls
   nicht erreichbar: auf ein SAS-Token umstellen (`repo1-azure-key-type=sas`, Token in
   Key Vault ablegen, `pgbackrest.conf.tftpl` anpassen).
 - **GitHub-Repo**: `dpvonline/azure-docker`, **public** (wie auch `azure-infrastructure`).
@@ -137,9 +138,11 @@ committen.
    - `ssh <ADMIN_USERNAME>@<vm_public_ip>`
    - `cd /opt/dpv/compose && sudo docker compose ps` prüfen, ob alle Container laufen
      (`COMPOSE_FILE` in `.env` listet alle drei Compose-Dateien, `-f`-Flags sind nicht nötig)
-   - `sudo docker compose exec postgres pgbackrest --stanza=main --config=/etc/pgbackrest/pgbackrest.conf stanza-create`
-     (einmalig, initialisiert das Backup-Repository — Postgres läuft nur im Container, kein
-     `sudo -u postgres` auf der VM nötig/möglich)
+   - `sudo docker compose exec --user postgres postgres pgbackrest --stanza=main --config=/etc/pgbackrest/pgbackrest.conf stanza-create`
+     (einmalig, initialisiert das Backup-Repository — `--user postgres` ist hier der Container-interne
+     Postgres-User, nicht mit einem Linux-User auf der VM zu verwechseln, den es nicht gibt;
+     `docker exec`/`compose exec` läuft sonst als `root`, und pgBackRest verbindet sich lokal
+     dann fälschlich als Rolle `root` statt `postgres`)
    - DNS für `auth.scout-tools.de` ist bereits durch `terraform/dns.tf` gesetzt (zeigt auf
      `vm_public_ip`) — sobald das propagiert ist, stellt Caddy automatisch ein
      Let's-Encrypt-Zertifikat aus. Für den späteren Produktiv-Cutover auf eine
