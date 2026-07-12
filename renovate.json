@@ -1,0 +1,20 @@
+{
+  "$schema": "https://docs.renovatebot.com/renovate-schema.json",
+  "extends": [
+    "config:recommended"
+  ],
+  "timezone": "UTC",
+  "schedule": ["before 6am on sunday"],
+  "packageRules": [
+    {
+      "description": "Patch/minor bumps are safe to roll out unattended — the weekly VM update run (scripts/update-containers.sh) takes a fresh backup and health-checks before/after.",
+      "matchUpdateTypes": ["patch", "minor"],
+      "automerge": true
+    },
+    {
+      "description": "Major bumps (e.g. postgres 17->18) can mean incompatible on-disk data or breaking changes — always reviewed manually, never auto-merged.",
+      "matchUpdateTypes": ["major"],
+      "automerge": false
+    }
+  ]
+}
