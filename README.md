@@ -53,7 +53,7 @@ Automatisierung (nur Platzhalter-Skript unter `scripts/update-containers.sh`).
   unterstützen, aber das ändert sich bei Azure gelegentlich — bei Fehlern in
   `terraform plan`/`apply` ggf. auf `Premium_LRS` in `terraform/vm.tf`
   (`azurerm_managed_disk.postgres_data`) zurückfallen.
-- **pgBackRest Managed-Identity-Auth aus dem Container**: `repo1-azure-key-type=msi`
+- **pgBackRest Managed-Identity-Auth aus dem Container**: `repo1-azure-key-type=auto`
   setzt voraus, dass der Postgres-Container die Azure Instance Metadata Service (IMDS,
   `169.254.169.254`) über Docker's Bridge-Netzwerk erreichen kann. Das funktioniert auf
   Azure-VMs i. d. R., sollte aber nach dem ersten Deploy mit
