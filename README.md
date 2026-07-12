@@ -113,7 +113,7 @@ committen.
 
    # Schritt 2a: erst Key Vault + Deploy-Key (noch keine VM)
    terraform apply -target=azurerm_key_vault.core -target=tls_private_key.deploy_key -target=azurerm_key_vault_secret.deploy_key_private
-   gh repo deploy-key add <(terraform output -raw deploy_key_public) --title "vm-dpv-core" --read-only -R dpvonline/azure-docker
+   gh repo deploy-key add <(terraform output -raw deploy_key_public) --title "vm-dpv-core" -R dpvonline/azure-docker
 
    # Schritt 2b: jetzt der Rest, inkl. VM — Deploy-Key ist bereits hinterlegt
    terraform apply
