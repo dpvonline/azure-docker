@@ -18,7 +18,7 @@ resource "azurerm_role_assignment" "vm_kv_secrets_user" {
 }
 
 # Whoever runs `terraform apply` needs write access to create the secrets below
-# (enable_rbac_authorization = true means Key Vault's own access policies don't apply).
+# (rbac_authorization_enabled = true means Key Vault's own access policies don't apply).
 resource "azurerm_role_assignment" "deployer_kv_officer" {
   scope                = azurerm_key_vault.core.id
   role_definition_name = "Key Vault Secrets Officer"
@@ -40,42 +40,36 @@ resource "random_password" "keycloak_admin" {
   special = false
 }
 
+# These secrets deliberately do NOT depend on azurerm_role_assignment.vm_kv_secrets_user:
+# that role assignment needs the VM's identity to exist, which would make secret
+# creation depend on the VM — backwards from what we need, since the VM's boot
+# script reads these secrets and so they must exist BEFORE the VM boots. See the
+# explicit depends_on on azurerm_linux_virtual_machine.app in vm.tf instead.
+
 resource "azurerm_key_vault_secret" "postgres_superuser" {
   name         = "postgres-superuser-password"
   value        = random_password.postgres_superuser.result
   key_vault_id = azurerm_key_vault.core.id
-  depends_on = [
-    azurerm_role_assignment.vm_kv_secrets_user,
-    azurerm_role_assignment.deployer_kv_officer,
-  ]
+  depends_on   = [azurerm_role_assignment.deployer_kv_officer]
 }
 
 resource "azurerm_key_vault_secret" "postgres_keycloak" {
   name         = "postgres-keycloak-password"
   value        = random_password.postgres_keycloak.result
   key_vault_id = azurerm_key_vault.core.id
-  depends_on = [
-    azurerm_role_assignment.vm_kv_secrets_user,
-    azurerm_role_assignment.deployer_kv_officer,
-  ]
+  depends_on   = [azurerm_role_assignment.deployer_kv_officer]
 }
 
 resource "azurerm_key_vault_secret" "keycloak_admin" {
   name         = "keycloak-admin-password"
   value        = random_password.keycloak_admin.result
   key_vault_id = azurerm_key_vault.core.id
-  depends_on = [
-    azurerm_role_assignment.vm_kv_secrets_user,
-    azurerm_role_assignment.deployer_kv_officer,
-  ]
+  depends_on   = [azurerm_role_assignment.deployer_kv_officer]
 }
 
 resource "azurerm_key_vault_secret" "ubuntu_pro_token" {
   name         = "ubuntu-pro-token"
   value        = var.UBUNTU_PRO_TOKEN
   key_vault_id = azurerm_key_vault.core.id
-  depends_on = [
-    azurerm_role_assignment.vm_kv_secrets_user,
-    azurerm_role_assignment.deployer_kv_officer,
-  ]
+  depends_on   = [azurerm_role_assignment.deployer_kv_officer]
 }

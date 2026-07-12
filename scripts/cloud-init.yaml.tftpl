@@ -3,8 +3,6 @@ package_update: true
 package_upgrade: true
 
 packages:
-  - docker.io
-  - docker-compose-plugin
   - git
   - unattended-upgrades
   - curl
@@ -37,6 +35,16 @@ write_files:
       WantedBy=multi-user.target
 
 runcmd:
+  # Docker Engine + Compose plugin from Docker's own apt repo — Ubuntu's
+  # archive only has the older "docker.io" package and no compose plugin at
+  # all, so mixing the two doesn't work.
+  - install -m 0755 -d /etc/apt/keyrings
+  - curl -fsSL https://download.docker.com/linux/ubuntu/gpg -o /etc/apt/keyrings/docker.asc
+  - chmod a+r /etc/apt/keyrings/docker.asc
+  - |
+    echo "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.asc] https://download.docker.com/linux/ubuntu $(. /etc/os-release && echo "$VERSION_CODENAME") stable" > /etc/apt/sources.list.d/docker.list
+  - apt-get update
+  - apt-get install -y docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin
   - systemctl enable --now docker
 
   # Azure CLI (needed for managed-identity secret fetches below)
@@ -44,25 +52,42 @@ runcmd:
 
   - az login --identity --allow-no-subscriptions
 
-  # Ubuntu Pro: attached once here for Livepatch + extended ESM
+  # Ubuntu Pro: attached once here for Livepatch + extended ESM. Logged
+  # explicitly on failure instead of swallowed, so a bad/missing token shows
+  # up in cloud-init-output.log rather than silently doing nothing.
   - export UBUNTU_PRO_TOKEN="$(az keyvault secret show --vault-name ${key_vault_name} --name ubuntu-pro-token --query value -o tsv)"
-  - pro attach "$UBUNTU_PRO_TOKEN" || true
+  - pro attach "$UBUNTU_PRO_TOKEN" || echo "WARNING - pro attach failed, check the ubuntu-pro-token secret in Key Vault" | tee -a /var/log/dpv-boot-warnings.log
 
-  # Deploy key for cloning this repo — private key only ever touches Key
-  # Vault + this file, never the repo itself.
+  # Deploy key for cloning this repo. Fetched via `-o json | jq -r` rather
+  # than `-o tsv` — tsv output mangles multi-line values like an SSH key,
+  # which silently corrupts it and breaks the git clone below.
   - mkdir -p /root/.ssh
   - chmod 700 /root/.ssh
-  - az keyvault secret show --vault-name ${key_vault_name} --name git-deploy-key-private --query value -o tsv > /root/.ssh/id_ed25519
+  - az keyvault secret show --vault-name ${key_vault_name} --name git-deploy-key-private --query value -o json | jq -r . > /root/.ssh/id_ed25519
   - chmod 600 /root/.ssh/id_ed25519
   - ssh-keyscan -t ed25519 github.com >> /root/.ssh/known_hosts 2>/dev/null
 
-  # Format + mount the Premium SSD v2 data disk (LUN 0 → stable by-lun path)
+  # Format + mount the Premium SSD v2 data disk. The exact /dev/disk/azure/...
+  # path varies by controller, so try known candidates and retry briefly
+  # instead of assuming one fixed path; dump lsblk if none show up so the
+  # failure is diagnosable from cloud-init-output.log.
   - mkdir -p /mnt/postgres-data
   - |
-    DEV=/dev/disk/azure/scsi1/lun0
-    if ! blkid "$DEV" >/dev/null 2>&1; then mkfs.ext4 -F "$DEV"; fi
-    grep -q postgres-data /etc/fstab || echo "$DEV /mnt/postgres-data ext4 defaults,nofail 0 2" >> /etc/fstab
-    mount -a
+    DEV=""
+    for candidate in /dev/disk/azure/scsi1/lun0 /dev/disk/azure/scsi0/lun0 /dev/disk/azure/data/by-lun/0; do
+      for i in $(seq 1 30); do
+        if [ -e "$candidate" ]; then DEV="$candidate"; break 2; fi
+        sleep 2
+      done
+    done
+    if [ -z "$DEV" ]; then
+      echo "ERROR: no data disk found under known /dev/disk/azure paths after waiting" | tee -a /var/log/dpv-boot-warnings.log
+      lsblk | tee -a /var/log/dpv-boot-warnings.log
+    else
+      if ! blkid "$DEV" >/dev/null 2>&1; then mkfs.ext4 -F "$DEV"; fi
+      grep -q postgres-data /etc/fstab || echo "$DEV /mnt/postgres-data ext4 defaults,nofail 0 2" >> /etc/fstab
+      mount -a
+    fi
   - chown -R 999:999 /mnt/postgres-data
 
   # Clone the repo (public half of the deploy key must already be added on

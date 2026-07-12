@@ -44,6 +44,11 @@ Automatisierung (nur Platzhalter-Skript unter `scripts/update-containers.sh`).
 
 ## Offene Punkte, die beim ersten echten Deploy zu prüfen sind
 
+- **Datenplatten-Gerätepfad**: cloud-init probiert beim Mounten mehrere bekannte
+  `/dev/disk/azure/...`-Pfade mit Retry (60s) durch und dumpt `lsblk` nach
+  `/var/log/dpv-boot-warnings.log`, falls keiner davon auftaucht. Sollte das
+  passieren: `lsblk` auf der VM prüfen und ggf. einen weiteren Pfad in
+  `scripts/cloud-init.yaml.tftpl` ergänzen.
 - **Premium SSD v2 Regionsverfügbarkeit**: `germanywestcentral` sollte PremiumV2_LRS
   unterstützen, aber das ändert sich bei Azure gelegentlich — bei Fehlern in
   `terraform plan`/`apply` ggf. auf `Premium_LRS` in `terraform/vm.tf`
@@ -118,6 +123,10 @@ committen.
    # Schritt 2b: jetzt der Rest, inkl. VM — Deploy-Key ist bereits hinterlegt
    terraform apply
    ```
+   Änderungen an `cloud-init.yaml.tftpl` (oder an sonst was, das in `custom_data`
+   einfließt) erzwingen bei jedem künftigen `apply` einen VM-Replace — Terraform
+   kann `custom_data` auf einer laufenden VM nicht aktualisieren, nur neu erstellen.
+   Erwartet und unkritisch, solange noch keine echten Daten auf der Platte liegen.
 
 3. Nach dem ersten Boot der VM (cloud-init braucht ein paar Minuten):
    - `ssh <ADMIN_USERNAME>@<vm_public_ip>`

@@ -62,6 +62,17 @@ resource "azurerm_linux_virtual_machine" "app" {
   }
 
   custom_data = base64encode(local.cloud_init)
+
+  # cloud-init reads these at boot — they must exist beforehand, which the
+  # secrets' own depends_on (see keyvault.tf / deploy-key.tf) deliberately
+  # does NOT guarantee, to avoid a circular dependency on the VM itself.
+  depends_on = [
+    azurerm_key_vault_secret.postgres_superuser,
+    azurerm_key_vault_secret.postgres_keycloak,
+    azurerm_key_vault_secret.keycloak_admin,
+    azurerm_key_vault_secret.ubuntu_pro_token,
+    azurerm_key_vault_secret.deploy_key_private,
+  ]
 }
 
 resource "azurerm_virtual_machine_data_disk_attachment" "postgres_data" {
