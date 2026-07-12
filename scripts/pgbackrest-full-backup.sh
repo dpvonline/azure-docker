@@ -7,5 +7,5 @@ set -euo pipefail
 # COMPOSE_FILE in compose/.env (written by fetch-secrets.sh) already lists all
 # three compose files, so no -f flags needed here.
 cd /opt/dpv/compose
-docker compose exec -T postgres \
+docker compose exec -T --user postgres postgres \
   pgbackrest --stanza=main --config=/etc/pgbackrest/pgbackrest.conf backup --type=full
