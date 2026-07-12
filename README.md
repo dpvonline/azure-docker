@@ -64,12 +64,19 @@ Automatisierung (nur Platzhalter-Skript unter `scripts/update-containers.sh`).
    ```
    Die Ausgabe (`storage_account_name`) wird für Schritt 2 gebraucht.
 
-2. **Hauptkonfiguration**:
+2. **Hauptkonfiguration** — in zwei Schritten, damit der Deploy-Key auf GitHub liegt,
+   *bevor* die VM zum ersten Mal bootet und versucht, das Repo zu klonen:
    ```
    cd ../terraform
    cp backend.hcl.example backend.hcl   # storage_account_name aus Schritt 1 eintragen
    cp terraform.tfvars.example terraform.tfvars   # ausfüllen (SSH-Key, Admin-IP, Domain, ...)
    terraform init -backend-config=backend.hcl
+
+   # Schritt 2a: erst Key Vault + Deploy-Key (noch keine VM)
+   terraform apply -target=azurerm_key_vault.core -target=tls_private_key.deploy_key -target=azurerm_key_vault_secret.deploy_key_private
+   gh repo deploy-key add <(terraform output -raw deploy_key_public) --title "vm-dpv-core" --read-only -R philip5/azure-docker
+
+   # Schritt 2b: jetzt der Rest, inkl. VM — Deploy-Key ist bereits hinterlegt
    terraform apply
    ```
 

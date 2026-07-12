@@ -17,7 +17,7 @@ LETSENCRYPT_EMAIL = "cloudadmin@dpvonline.de"
 
 UBUNTU_PRO_TOKEN = "C1abcDEFghiJKLmnoPQRstuVWXyz123"  # von ubuntu.com/pro, kostenloses Personal-Abo
 
-GITHUB_REPO_SSH_URL = "git@github.com:YOUR_ORG/azure-docker.git"
+GITHUB_REPO_SSH_URL = "git@github.com:philip5/azure-docker.git"
 
 OLD_REPO_RESOURCE_GROUP = "Infra"
 ACR_NAME                = "biber"
