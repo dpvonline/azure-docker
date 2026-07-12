@@ -38,8 +38,12 @@ EOF
 chown root:root "${COMPOSE_DIR}/.env"
 chmod 600 "${COMPOSE_DIR}/.env"
 
-# Only ever read by Postgres on first init of an empty data directory.
+# Only ever read by Postgres on first init of an empty data directory. Bind-
+# mounted INTO the postgres container and executed there by the non-root
+# "postgres" user — 600/root:root (like .env) would make it unreadable to
+# that user and silently skip the CREATE USER statement, which is exactly
+# what caused Keycloak's "role does not exist" errors on a real deploy.
 sed "s/__POSTGRES_KEYCLOAK_PASSWORD__/${POSTGRES_KEYCLOAK_PASSWORD}/" \
   "${COMPOSE_DIR}/init-db.sql.template" > "${COMPOSE_DIR}/init-db.sql"
 chown root:root "${COMPOSE_DIR}/init-db.sql"
-chmod 600 "${COMPOSE_DIR}/init-db.sql"
+chmod 644 "${COMPOSE_DIR}/init-db.sql"
