@@ -61,6 +61,22 @@ Automatisierung (nur Platzhalter-Skript unter `scripts/update-containers.sh`).
   alles Sensible läuft über Key Vault), sondern weil es unter `dpvonline` liegt und
   so unabhängig von persönlichen GitHub-Berechtigungen einzelner Personen bleibt.
 
+## Repo-Absicherung (GitHub)
+
+- **Branch protection auf `main`**: PR + mindestens 1 Review nötig, `enforce_admins`
+  aktiv (gilt auch für Admins/Maintainer — niemand kann direkt pushen oder force-pushen),
+  Löschen des Branches blockiert. Nicht-Mitglieder von `dpvonline` konnten ohnehin schon
+  vorher nicht direkt pushen (GitHub-Standardverhalten bei public Repos ohne
+  Schreibrechte) — das betrifft also v. a. bestehende Org-Mitglieder/Collaborators.
+- **Secret Scanning + Push Protection** aktiviert: GitHub blockt Pushes, die wie Secrets
+  aussehen, schon vor dem Landen im Repo — zusätzliches Netz, falls mal versehentlich
+  eine echte `terraform.tfvars`/`backend.hcl` statt der `.example`-Version committed würde.
+- **Bekannter Rest-Punkt**: die Org `dpvonline` hat aktuell `default_repository_permission:
+  admin` gesetzt — alle 10 Org-Mitglieder haben dadurch Admin-Rechte auf dieses (und jedes
+  andere) Repo, inkl. Settings/Deploy-Keys/Secrets und der Möglichkeit, Branch Protection
+  selbst wieder abzuschalten. Das ist eine Org-weite Einstellung, keine Repo-spezifische —
+  sie wurde hier bewusst nicht angefasst, weil sie alle Repos der Organisation betrifft.
+
 ## SSH-Zugang einrichten
 
 `ADMIN_USERNAME` ist frei wählbar (Default `dpvadmin`) — einfach ein Linux-Benutzername für
