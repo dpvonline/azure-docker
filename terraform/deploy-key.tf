@@ -11,10 +11,8 @@ resource "azurerm_key_vault_secret" "deploy_key_private" {
   name         = "git-deploy-key-private"
   value        = tls_private_key.deploy_key.private_key_openssh
   key_vault_id = azurerm_key_vault.core.id
-  depends_on = [
-    azurerm_role_assignment.vm_kv_secrets_user,
-    azurerm_role_assignment.deployer_kv_officer,
-  ]
+  # Not depending on vm_kv_secrets_user — see the comment in keyvault.tf.
+  depends_on = [azurerm_role_assignment.deployer_kv_officer]
 }
 
 output "deploy_key_public" {
