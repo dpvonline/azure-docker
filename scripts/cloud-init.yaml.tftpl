@@ -113,8 +113,15 @@ runcmd:
     EOS
   - chmod +x /opt/dpv/scripts/boot.sh
 
+  # Weekly automated update run (scripts/update-containers.sh) — unit files
+  # are static (no Terraform values needed), so future changes to them don't
+  # require a VM rebuild, only this initial copy-in does.
+  - cp /opt/dpv/scripts/systemd/dpv-update.service /etc/systemd/system/dpv-update.service
+  - cp /opt/dpv/scripts/systemd/dpv-update.timer /etc/systemd/system/dpv-update.timer
+
   - systemctl daemon-reload
   - systemctl enable --now dpv-compose.service
+  - systemctl enable --now dpv-update.timer
 
   # Nightly full backup (continuous WAL archiving handles the gaps in between)
   - echo "0 2 * * * root /opt/dpv/scripts/pgbackrest-full-backup.sh >> /var/log/pgbackrest-full.log 2>&1" > /etc/cron.d/pgbackrest-full

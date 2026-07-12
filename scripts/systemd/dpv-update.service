@@ -1,0 +1,10 @@
+[Unit]
+Description=DPV weekly container update run
+After=network-online.target docker.service dpv-compose.service
+Wants=network-online.target
+Requires=docker.service
+
+[Service]
+Type=oneshot
+ExecStart=/opt/dpv/scripts/update-containers.sh
+TimeoutStartSec=1800

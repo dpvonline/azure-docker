@@ -1,0 +1,12 @@
+[Unit]
+Description=Weekly trigger for dpv-update.service
+
+[Timer]
+# After the nightly 02:00 UTC pgbackrest-full cron entry, so a fresh backup
+# already exists going into the update run (which also takes its own
+# pre-update backup regardless).
+OnCalendar=Sun *-*-* 03:30:00
+Persistent=true
+
+[Install]
+WantedBy=timers.target
