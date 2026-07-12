@@ -32,8 +32,15 @@ Automatisierung (nur Platzhalter-Skript unter `scripts/update-containers.sh`).
   cert-manager/nginx-ingress nötig.
 - **Terraform-State liegt remote** in einem Azure Storage Account (`bootstrap/` legt ihn
   einmalig an, da der Storage Account nicht sein eigenes Backend sein kann).
-- **DNS** für `dpvonline.de` liegt extern (nicht Azure DNS) — der Umstieg der A/AAAA-Records
-  auf die neue VM-IP ist ein manueller Schritt beim Cutover, nicht Teil dieses Repos.
+- **DNS zum Testen**: `auth.scout-tools.de` — die Zone `scout-tools.de` gehört weiterhin dem
+  alten Repo (`azure-infrastructure`, `azure/domain.tf`), dieses Repo referenziert sie nur
+  per `data`-Quelle und verwaltet einen einzelnen neuen Record (`auth`, dort aktuell
+  auskommentiert/nicht angelegt) über `terraform/dns.tf`. **Für den echten Cutover** liegt
+  `dpvonline.de` extern (nicht Azure DNS) — der Umstieg der A/AAAA-Records auf die neue
+  VM-IP bleibt dann ein manueller Schritt, nicht Teil dieses Repos.
+- **Resource Group**: bewusst eine neue (`rg-dpv-core`), getrennt von `Infra` (dem alten
+  Repo) — nur die ACR-Rolle und jetzt der DNS-Record referenzieren `Infra` per `data`-Quelle,
+  nichts davon wird hier verändert oder mitverwaltet.
 
 ## Offene Punkte, die beim ersten echten Deploy zu prüfen sind
 
@@ -48,9 +55,25 @@ Automatisierung (nur Platzhalter-Skript unter `scripts/update-containers.sh`).
   `docker compose exec postgres pgbackrest --stanza=main check` verifiziert werden. Falls
   nicht erreichbar: auf ein SAS-Token umstellen (`repo1-azure-key-type=sas`, Token in
   Key Vault ablegen, `pgbackrest.conf.tftpl` anpassen).
-- **GitHub-Repo-Sichtbarkeit**: als **privat** angelegt. Die VM klont es über einen
-  Deploy-Key (read-only, SSH), dessen privater Schlüssel in Key Vault liegt — es gibt also
-  keine Secrets im Repo selbst, aber der Klon-Mechanismus braucht den Deploy-Key.
+- **GitHub-Repo**: `dpvonline/azure-docker`, **public** (wie auch `azure-infrastructure`).
+  Die VM klont es trotzdem über einen Deploy-Key (read-only, SSH), dessen privater
+  Schlüssel in Key Vault liegt — nicht weil das Repo Secrets enthält (tut es nicht,
+  alles Sensible läuft über Key Vault), sondern weil es unter `dpvonline` liegt und
+  so unabhängig von persönlichen GitHub-Berechtigungen einzelner Personen bleibt.
+
+## SSH-Zugang einrichten
+
+`ADMIN_USERNAME` ist frei wählbar (Default `dpvadmin`) — einfach ein Linux-Benutzername für
+den SSH-Login auf die VM, keine Registrierung nötig. `ADMIN_SSH_PUBLIC_KEY` ist die
+öffentliche Hälfte eines SSH-Schlüsselpaars. Dediziert für diese VM erzeugen (nicht den
+privaten SSH-Key wiederverwenden):
+```
+ssh-keygen -t ed25519 -f ~/.ssh/dpv_core_vm_ed25519 -N "" -C "dpvadmin@vm-dpv-core"
+cat ~/.ssh/dpv_core_vm_ed25519.pub   # das kommt in ADMIN_SSH_PUBLIC_KEY
+```
+Der private Schlüssel (`~/.ssh/dpv_core_vm_ed25519`, ohne `.pub`) bleibt lokal und wird
+später für `ssh -i ~/.ssh/dpv_core_vm_ed25519 dpvadmin@<vm_public_ip>` gebraucht — nirgends
+committen.
 
 ## Setup-Reihenfolge
 
@@ -74,7 +97,7 @@ Automatisierung (nur Platzhalter-Skript unter `scripts/update-containers.sh`).
 
    # Schritt 2a: erst Key Vault + Deploy-Key (noch keine VM)
    terraform apply -target=azurerm_key_vault.core -target=tls_private_key.deploy_key -target=azurerm_key_vault_secret.deploy_key_private
-   gh repo deploy-key add <(terraform output -raw deploy_key_public) --title "vm-dpv-core" --read-only -R philip5/azure-docker
+   gh repo deploy-key add <(terraform output -raw deploy_key_public) --title "vm-dpv-core" --read-only -R dpvonline/azure-docker
 
    # Schritt 2b: jetzt der Rest, inkl. VM — Deploy-Key ist bereits hinterlegt
    terraform apply
@@ -84,9 +107,10 @@ Automatisierung (nur Platzhalter-Skript unter `scripts/update-containers.sh`).
    - `ssh <ADMIN_USERNAME>@<vm_public_ip>`
    - `sudo docker compose -f /opt/dpv/compose/docker-compose.yml ... ps` prüfen, ob alle Container laufen
    - `sudo -u postgres docker compose exec postgres pgbackrest --stanza=main --config=/etc/pgbackrest/pgbackrest.conf stanza-create` (einmalig, initialisiert das Backup-Repository)
-   - DNS: `auth.dpvonline.de` (oder den in `DOMAIN_AUTH` gewählten Namen) manuell auf die
-     Terraform-Output-IP `vm_public_ip` zeigen lassen — danach stellt Caddy automatisch ein
-     Let's-Encrypt-Zertifikat aus.
+   - DNS für `auth.scout-tools.de` ist bereits durch `terraform/dns.tf` gesetzt (zeigt auf
+     `vm_public_ip`) — sobald das propagiert ist, stellt Caddy automatisch ein
+     Let's-Encrypt-Zertifikat aus. Für den späteren Produktiv-Cutover auf eine
+     `dpvonline.de`-Subdomain bleibt das ein manueller DNS-Schritt (siehe oben).
 
 4. Verifikation: siehe Plan-Datei bzw. `curl -I https://<DOMAIN_AUTH>` und
    `curl http://localhost:9000/health/ready` (Keycloak-Health, von der VM aus).

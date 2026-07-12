@@ -45,7 +45,7 @@ variable "BACKUP_STORAGE_ACCOUNT_NAME" {
 
 variable "DOMAIN_AUTH" {
   type        = string
-  description = "Hostname Keycloak will be reachable under, e.g. auth.dpvonline.de"
+  description = "Hostname Keycloak will be reachable under. Use a scout-tools.de subdomain for testing (see dns.tf, which manages the 'auth' record there); switch to a dpvonline.de subdomain for the eventual production cutover (manual DNS step, that zone lives outside this repo)."
 }
 
 variable "LETSENCRYPT_EMAIL" {
