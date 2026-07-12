@@ -4,8 +4,8 @@
 # in docker-compose.postgres.yml) covers the point-in-time recovery in between.
 set -euo pipefail
 
+# COMPOSE_FILE in compose/.env (written by fetch-secrets.sh) already lists all
+# three compose files, so no -f flags needed here.
 cd /opt/dpv/compose
-docker compose \
-  -f docker-compose.yml -f docker-compose.postgres.yml -f docker-compose.keycloak.yml \
-  exec -T postgres \
+docker compose exec -T postgres \
   pgbackrest --stanza=main --config=/etc/pgbackrest/pgbackrest.conf backup --type=full

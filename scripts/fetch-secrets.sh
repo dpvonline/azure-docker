@@ -23,6 +23,7 @@ KEYCLOAK_ADMIN_PASSWORD="$(get_secret keycloak-admin-password)"
 umask 077
 
 cat > "${COMPOSE_DIR}/.env" <<EOF
+COMPOSE_FILE=docker-compose.yml:docker-compose.postgres.yml:docker-compose.keycloak.yml
 DOMAIN_AUTH=${DOMAIN_AUTH}
 LETSENCRYPT_EMAIL=${LETSENCRYPT_EMAIL}
 POSTGRES_SUPERUSER_PASSWORD=${POSTGRES_SUPERUSER_PASSWORD}

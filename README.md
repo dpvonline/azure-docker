@@ -130,15 +130,19 @@ committen.
 
 3. Nach dem ersten Boot der VM (cloud-init braucht ein paar Minuten):
    - `ssh <ADMIN_USERNAME>@<vm_public_ip>`
-   - `sudo docker compose -f /opt/dpv/compose/docker-compose.yml ... ps` prüfen, ob alle Container laufen
-   - `sudo -u postgres docker compose exec postgres pgbackrest --stanza=main --config=/etc/pgbackrest/pgbackrest.conf stanza-create` (einmalig, initialisiert das Backup-Repository)
+   - `cd /opt/dpv/compose && sudo docker compose ps` prüfen, ob alle Container laufen
+     (`COMPOSE_FILE` in `.env` listet alle drei Compose-Dateien, `-f`-Flags sind nicht nötig)
+   - `sudo docker compose exec postgres pgbackrest --stanza=main --config=/etc/pgbackrest/pgbackrest.conf stanza-create`
+     (einmalig, initialisiert das Backup-Repository — Postgres läuft nur im Container, kein
+     `sudo -u postgres` auf der VM nötig/möglich)
    - DNS für `auth.scout-tools.de` ist bereits durch `terraform/dns.tf` gesetzt (zeigt auf
      `vm_public_ip`) — sobald das propagiert ist, stellt Caddy automatisch ein
      Let's-Encrypt-Zertifikat aus. Für den späteren Produktiv-Cutover auf eine
      `dpvonline.de`-Subdomain bleibt das ein manueller DNS-Schritt (siehe oben).
 
-4. Verifikation: siehe Plan-Datei bzw. `curl -I https://<DOMAIN_AUTH>` und
-   `curl http://localhost:9000/health/ready` (Keycloak-Health, von der VM aus).
+4. Verifikation: `curl -I https://<DOMAIN_AUTH>` (von außen) und, da Keycloaks Port 9000
+   absichtlich nicht auf den Host published ist (nur Caddy erreicht ihn intern), von der VM aus:
+   `cd /opt/dpv/compose && sudo docker compose exec caddy wget -qO- http://keycloak:9000/health/ready`.
 
 ## Repo-Struktur
 

@@ -109,7 +109,7 @@ runcmd:
     az login --identity --allow-no-subscriptions >/dev/null
     /opt/dpv/scripts/fetch-secrets.sh "${key_vault_name}" "${domain_auth}" "${letsencrypt_email}"
     cd /opt/dpv/compose
-    docker compose -f docker-compose.yml -f docker-compose.postgres.yml -f docker-compose.keycloak.yml up -d --build
+    docker compose up -d --build
     EOS
   - chmod +x /opt/dpv/scripts/boot.sh
 
