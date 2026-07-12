@@ -10,8 +10,10 @@ Dieser erste Ausbau deckt bewusst nur ab: VM, Netzwerk, Key Vault, Postgres (sel
 im Container + pgBackRest-Backups gegen Azure Blob), Keycloak, Caddy (automatisches HTTPS).
 
 **Noch nicht enthalten** (spätere Schritte): Confluence, Nextcloud, Redis, Biber-Backend,
-Standby-VM/Failover, automatisierte DNS-Umstellung für dpvonline.de, Container-Update-
-Automatisierung (nur Platzhalter-Skript unter `scripts/update-containers.sh`).
+Standby-VM/Failover, automatisierte DNS-Umstellung für dpvonline.de.
+
+Container-Updates sind seitdem automatisiert (Renovate + wöchentlicher Rollout mit
+Rollback) — siehe unten.
 
 ## Architektur
 
@@ -226,11 +228,71 @@ Verbindung neu aufzubauen).
 vorliegt — ein Backup, das nie erfolgreich zurückgespielt wurde, ist nicht wirklich
 verifiziert.
 
+## Automatisierte Container-Updates (Renovate)
+
+Zwei getrennte Bausteine: **Erkennen** neuer Image-/Provider-Versionen (GitHub-seitig,
+per PR) und **Ausrollen** auf der VM (wöchentlich, automatisch, mit Rollback).
+
+### Versions-Erkennung
+
+[Renovate](https://github.com/apps/renovate) (gehostete Mend-App) statt Dependabot,
+weil es zusätzlich **Terraform-Provider-Versionen** abdeckt (`azurerm`/`random`/`tls`)
+und eingebautes Auto-Merge direkt in der Config hat (kein separater GitHub-Actions-
+Workflow nötig — praktisch, da unser `gh`-Token ohnehin keinen `workflow`-Scope hat).
+Konfiguriert in `renovate.json`: wöchentlich sonntags, `packageRules` mit Automerge nur
+für Patch/Minor — Major-Bumps (z. B. ein Sprung von `postgres:17` auf `18`) bleiben
+immer manuell zu mergen, weil sowas bei Postgres kein simpler Image-Swap ist
+(inkompatibles Datenverzeichnis, braucht `pg_upgrade`/Dump-Restore) und bei Keycloak
+größere Migrationen mit sich bringen kann.
+
+**Einmalig nötig** (schon erledigt): die Renovate-GitHub-App muss über
+https://github.com/apps/renovate auf `dpvonline/azure-docker` installiert werden —
+bewusst kein Schritt, den Terraform oder ich automatisieren, weil das eine
+Drittanbieter-Berechtigung ist, die jemand mit Repo-Admin-Rechten bewusst bestätigen
+sollte.
+
+### Rollout auf der VM
+
+`scripts/update-containers.sh`, ausgelöst wöchentlich durch den systemd-Timer
+`dpv-update.timer` (Sonntag 03:30 UTC, nach dem nächtlichen 02:00-Backup-Cron;
+`Persistent=true` holt einen verpassten Lauf nach, falls die VM zu dem Zeitpunkt aus
+war). Ablauf:
+
+1. Aktuellen Git-Commit merken (für einen möglichen Rollback).
+2. **Vor** jeder Änderung: zusätzliches `pgbackrest`-Full-Backup als Sicherheitsnetz —
+   schlägt das fehl, bricht der Lauf sofort ab, ohne irgendetwas anzufassen.
+3. `git pull` (holt gemergte Renovate-PRs + sonstige `main`-Änderungen).
+4. `docker compose pull && docker compose up -d --build`.
+5. Health-Check-Schleife (bis zu 5 Minuten): alle Services `running`, Keycloak-Health
+   (`/health/ready`), Postgres (`pg_isready`).
+6. Bei Erfolg: Log-Eintrag nach `/var/log/dpv-update.log`, fertig.
+7. Bei Fehlschlag (Pull/Build/Health-Check): `git reset --hard` auf den gemerkten
+   Commit + `docker compose up -d --build` — Rollback auf den vorherigen Stand (alte
+   Images liegen i. d. R. noch lokal im Cache, kein erneuter Pull nötig).
+
+**Ehrliche Grenze**: das Rollback bringt den Container-Stand zurück, aber falls eine
+DB-Migration (Keycloak führt bei *jeder* Versionsänderung welche aus, nicht nur bei
+Major-Versionen) vor dem Fehlschlag bereits teilweise gegriffen hat, ist das nicht
+automatisch mit rückgängig gemacht — dafür ist das Vor-Update-Backup da (manueller
+Restore nach dem oben beschriebenen Ablauf).
+
+Manuell antriggern (z. B. zum Testen, nicht bis Sonntag warten):
+```bash
+sudo systemctl start dpv-update.service
+sudo tail -f /var/log/dpv-update.log
+```
+
+Die systemd-Unit-Dateien (`scripts/systemd/dpv-update.{service,timer}`) sind bewusst
+**statische Dateien im Repo**, nicht in `custom_data` gerendert — künftige Änderungen an
+Schedule/Logik brauchen dadurch keinen VM-Rebuild mehr, nur diese initiale Einführung
+brauchte noch einen (weil `cloud-init.yaml.tftpl`s `runcmd` sich geändert hat, um die
+Dateien einmalig zu kopieren).
+
 ## Repo-Struktur
 
 ```
 bootstrap/    einmaliger Storage Account fürs Terraform-Remote-State (eigenes State)
 terraform/    eigentliche Infrastruktur (VM, Netzwerk, Key Vault, Postgres-Backup-Storage, ACR-Zugriff)
 compose/      Docker-Compose-Definitionen + Caddyfile, laufen auf der VM
-scripts/      cloud-init-Template, Secret-Fetch-Skript, pgBackRest-Config-Template, Backup-Cron
+scripts/      cloud-init-Template, Secret-Fetch-Skript, pgBackRest-Config-Template, Backup-Cron, Update-Skript + systemd-Units
 ```
