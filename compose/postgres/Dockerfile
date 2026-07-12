@@ -7,3 +7,7 @@ RUN apt-get update \
     && rm -rf /var/lib/apt/lists/*
 
 COPY pgbackrest.conf /etc/pgbackrest/pgbackrest.conf
+
+# The pgbackrest package locks down /etc/pgbackrest by default; the "postgres"
+# user (non-root, runs archive_command) can't traverse/read it otherwise.
+RUN chmod 755 /etc/pgbackrest && chmod 644 /etc/pgbackrest/pgbackrest.conf
