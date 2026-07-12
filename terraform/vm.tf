@@ -20,8 +20,6 @@ locals {
   cloud_init = templatefile("${path.module}/../scripts/cloud-init.yaml.tftpl", {
     admin_username      = var.ADMIN_USERNAME
     key_vault_name      = azurerm_key_vault.core.name
-    domain_auth         = var.DOMAIN_AUTH
-    letsencrypt_email   = var.LETSENCRYPT_EMAIL
     github_repo_ssh_url = var.GITHUB_REPO_SSH_URL
     pgbackrest_conf_b64 = base64encode(local.pgbackrest_conf)
   })
@@ -71,6 +69,8 @@ resource "azurerm_linux_virtual_machine" "app" {
     azurerm_key_vault_secret.postgres_keycloak,
     azurerm_key_vault_secret.keycloak_admin,
     azurerm_key_vault_secret.ubuntu_pro_token,
+    azurerm_key_vault_secret.domain_auth,
+    azurerm_key_vault_secret.letsencrypt_email,
     azurerm_key_vault_secret.deploy_key_private,
   ]
 }

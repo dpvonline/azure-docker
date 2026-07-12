@@ -128,6 +128,11 @@ committen.
    kann `custom_data` auf einer laufenden VM nicht aktualisieren, nur neu erstellen.
    Erwartet und unkritisch, solange noch keine echten Daten auf der Platte liegen.
 
+   `DOMAIN_AUTH`/`LETSENCRYPT_EMAIL` sind davon **nicht** betroffen — die liegen
+   bewusst in Key Vault statt in `custom_data`. Eine Domain-Änderung braucht also
+   nur `terraform apply` (aktualisiert nur das Secret) und danach auf der VM
+   `sudo systemctl restart dpv-compose.service` — kein VM-Neuaufbau nötig.
+
 3. Nach dem ersten Boot der VM (cloud-init braucht ein paar Minuten):
    - `ssh <ADMIN_USERNAME>@<vm_public_ip>`
    - `cd /opt/dpv/compose && sudo docker compose ps` prüfen, ob alle Container laufen
