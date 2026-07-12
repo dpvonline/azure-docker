@@ -152,6 +152,80 @@ committen.
    absichtlich nicht auf den Host published ist (nur Caddy erreicht ihn intern), von der VM aus:
    `cd /opt/dpv/compose && sudo docker compose exec caddy wget -qO- http://keycloak:9000/health/ready`.
 
+## Backup & Restore (pgBackRest)
+
+### Konfiguration
+
+- **Config-Datei**: `/etc/pgbackrest/pgbackrest.conf` *im Postgres-Container* (nicht auf der
+  VM selbst) — gebaut aus `scripts/pgbackrest.conf.tftpl`, von Terraform mit
+  Storage-Account-/Container-Namen befüllt und über `compose/postgres/Dockerfile`
+  (`COPY pgbackrest.conf ...`) ins Image gebacken. Änderungen daran heißen: Terraform
+  ändert die gerenderte Datei → `custom_data` ändert sich → VM-Replace beim nächsten
+  `apply` (siehe oben).
+- **Repository**: eigener Azure Storage Account (`BACKUP_STORAGE_ACCOUNT_NAME`,
+  `terraform/backup-storage.tf`), Blob-Container `pgbackrest` — bewusst getrennt vom
+  Terraform-State-Storage-Account aus `bootstrap/`.
+- **Auth**: Managed Identity (`repo1-azure-key-type=auto`), keine Keys/SAS-Tokens
+  irgendwo abgelegt. Die VM-Identity hat dafür die Rolle `Storage Blob Data Contributor`
+  auf genau diesen Storage Account (`azurerm_role_assignment.vm_backup_blob_contributor`).
+- **Kontinuierliches WAL-Archiving**: `archive_mode=on` +
+  `archive_command=pgbackrest ... archive-push %p` + `archive_timeout=600`, konfiguriert
+  im `command:`-Block von `compose/docker-compose.postgres.yml`. Damit ist der maximale
+  Datenverlust im Idle-Fall 10 Minuten, bei aktiver Schreiblast quasi punktgenau.
+- **Täglicher Full-Backup**: Cron-Job `/etc/cron.d/pgbackrest-full` (von cloud-init
+  angelegt), läuft `scripts/pgbackrest-full-backup.sh` jede Nacht um 02:00 UTC, loggt nach
+  `/var/log/pgbackrest-full.log`.
+- **Retention**: `repo1-retention-full=7` — die letzten 7 Full-Backups (+ zugehörige WAL)
+  bleiben erhalten, ältere werden automatisch von pgBackRest selbst expired.
+- **Kompression**: `compress-type=zst`.
+- **Einmalig nach jedem VM-Neuaufbau nötig**: `stanza-create` (siehe Setup-Reihenfolge,
+  Schritt 3) — das Backup-Repository muss einmal initialisiert werden, bevor Archiving/
+  Backups funktionieren.
+
+Alle manuellen `pgbackrest`-Aufrufe (Check, Restore, Backup) müssen im Container als
+`--user postgres` laufen (`docker exec`/`compose exec` ist sonst `root`, und pgBackRest
+verbindet sich lokal über die Rolle des aufrufenden OS-Users, die für `root` nicht
+existiert):
+
+```bash
+# Backup-Historie ansehen (welche Full-Backups/WAL-Zeitpunkte existieren)
+sudo docker exec -u postgres dpv-core-postgres-1 pgbackrest --stanza=main --config=/etc/pgbackrest/pgbackrest.conf info
+
+# Repository-Verbindung + WAL-Archiving testen
+sudo docker exec -u postgres dpv-core-postgres-1 pgbackrest --stanza=main --config=/etc/pgbackrest/pgbackrest.conf check
+```
+
+### Restore
+
+Der Postgres-Container darf während des Restores nicht parallel laufen — Restore läuft
+über einen temporären Container, der dieselben Volumes/dieselbe Config mountet:
+
+```bash
+cd /opt/dpv/compose
+sudo docker compose stop postgres
+
+# Neuester Stand:
+sudo docker compose run --rm --entrypoint bash postgres -c '
+  set -e
+  rm -rf /var/lib/postgresql/data/pgdata/*
+  gosu postgres pgbackrest --stanza=main --config=/etc/pgbackrest/pgbackrest.conf restore
+'
+
+sudo docker compose up -d postgres
+```
+
+**Point-in-Time-Restore** (auf einen bestimmten Zeitpunkt statt den neuesten Stand):
+im `restore`-Aufruf zusätzlich `--type=time --target="2026-07-12 10:00:00"` (o. ä.)
+anhängen — nutzt die kontinuierlich archivierten WAL-Segmente.
+
+Nach dem Restore: `sudo docker compose ps` prüfen, dass Postgres/Keycloak wieder sauber
+hochkommen (Keycloak greift auf dieselbe DB zu und braucht ggf. einen Moment, um die
+Verbindung neu aufzubauen).
+
+**Empfehlung**: einen Restore ab und zu unabhängig davon testen, ob gerade ein Vorfall
+vorliegt — ein Backup, das nie erfolgreich zurückgespielt wurde, ist nicht wirklich
+verifiziert.
+
 ## Repo-Struktur
 
 ```
