@@ -1,0 +1,33 @@
+# Terraform
+**/.terraform/*
+*.tfstate
+*.tfstate.*
+*.tfstate.backup
+.terraform.tfstate.lock.info
+crash.log
+crash.*.log
+
+# Variable files may contain sensitive input — never commit real values
+*.tfvars
+*.tfvars.json
+!*.tfvars.example
+
+# Backend config contains the real storage account name/keys context
+backend.hcl
+
+# Runtime secrets rendered on the VM, never meant for git
+compose/.env
+compose/init-db.sql
+compose/postgres/pgbackrest.conf
+
+# SSH / deploy keys generated locally during setup
+*.pem
+id_ed25519*
+
+# Terraform CLI config
+.terraformrc
+terraform.rc
+
+# IDE / OS
+.idea
+.DS_Store

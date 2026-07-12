@@ -1,0 +1,23 @@
+# cp terraform.tfvars.example terraform.tfvars und ausfüllen (terraform.tfvars ist gitignored)
+
+SUBSCRIPTION_ID      = "00000000-0000-0000-0000-000000000000"
+REGION               = "germanywestcentral"
+ADMIN_USERNAME       = "dpvadmin"
+ADMIN_SSH_PUBLIC_KEY = "ssh-ed25519 AAAA... you@example.com"
+ADMIN_IP_CIDRS       = ["203.0.113.10/32"]
+
+VM_SIZE                = "Standard_B2ms"
+POSTGRES_DISK_SIZE_GB   = 32
+
+KEY_VAULT_NAME              = "dpv-core-kv01"     # global eindeutig
+BACKUP_STORAGE_ACCOUNT_NAME = "dpvbackups01"      # global eindeutig, nur a-z0-9
+
+DOMAIN_AUTH       = "auth.dpvonline.de"
+LETSENCRYPT_EMAIL = "cloudadmin@dpvonline.de"
+
+UBUNTU_PRO_TOKEN = "C1abcDEFghiJKLmnoPQRstuVWXyz123"  # von ubuntu.com/pro, kostenloses Personal-Abo
+
+GITHUB_REPO_SSH_URL = "git@github.com:YOUR_ORG/azure-docker.git"
+
+OLD_REPO_RESOURCE_GROUP = "Infra"
+ACR_NAME                = "biber"

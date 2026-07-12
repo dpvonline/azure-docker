@@ -1,0 +1,4 @@
+# cp backend.hcl.example backend.hcl und mit dem Output von `bootstrap/` befüllen
+# (backend.hcl ist gitignored)
+resource_group_name  = "rg-dpv-tfstate"
+storage_account_name = "dpvtfstate01"

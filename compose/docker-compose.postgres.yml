@@ -1,0 +1,28 @@
+services:
+  postgres:
+    build: ./postgres
+    image: dpv-postgres:17-pgbackrest
+    restart: unless-stopped
+    networks:
+      - dpv
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: ${POSTGRES_SUPERUSER_PASSWORD}
+      PGDATA: /var/lib/postgresql/data/pgdata
+    # Continuous WAL archiving to pgBackRest — at most 10 minutes of data loss
+    # even if nothing is written (archive_timeout), point-in-time otherwise.
+    command:
+      - "postgres"
+      - "-c"
+      - "wal_level=replica"
+      - "-c"
+      - "archive_mode=on"
+      - "-c"
+      - "archive_command=pgbackrest --stanza=main --config=/etc/pgbackrest/pgbackrest.conf archive-push %p"
+      - "-c"
+      - "archive_timeout=600"
+    volumes:
+      - /mnt/postgres-data:/var/lib/postgresql/data
+      - ./init-db.sql:/docker-entrypoint-initdb.d/init-db.sql:ro
+    # No `ports:` — only reachable from other containers on the "dpv" network,
+    # never exposed on the host's public interface.

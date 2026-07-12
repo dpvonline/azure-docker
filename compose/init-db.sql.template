@@ -1,0 +1,4 @@
+-- Rendered into ./init-db.sql by scripts/fetch-secrets.sh, only ever read by
+-- Postgres on first initialization of an empty data directory.
+CREATE USER keycloak WITH PASSWORD '__POSTGRES_KEYCLOAK_PASSWORD__';
+CREATE DATABASE keycloak OWNER keycloak;

@@ -1,0 +1,7 @@
+{
+	email {$LETSENCRYPT_EMAIL}
+}
+
+{$DOMAIN_AUTH} {
+	reverse_proxy keycloak:8080
+}

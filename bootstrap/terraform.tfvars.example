@@ -1,0 +1,5 @@
+# cp terraform.tfvars.example terraform.tfvars und ausfüllen (terraform.tfvars ist gitignored)
+
+SUBSCRIPTION_ID            = "00000000-0000-0000-0000-000000000000"
+REGION                     = "germanywestcentral"
+STATE_STORAGE_ACCOUNT_NAME = "dpvtfstate01" # muss global eindeutig sein, 3-24 Zeichen, nur a-z0-9

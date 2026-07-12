@@ -1,0 +1,96 @@
+#cloud-config
+package_update: true
+package_upgrade: true
+
+packages:
+  - docker.io
+  - docker-compose-plugin
+  - git
+  - unattended-upgrades
+  - curl
+  - ca-certificates
+  - gnupg
+  - jq
+
+write_files:
+  - path: /opt/staging/pgbackrest.conf
+    encoding: b64
+    permissions: '0600'
+    content: ${pgbackrest_conf_b64}
+
+  - path: /etc/systemd/system/dpv-compose.service
+    permissions: '0644'
+    content: |
+      [Unit]
+      Description=DPV docker compose stack
+      After=network-online.target docker.service
+      Wants=network-online.target
+      Requires=docker.service
+
+      [Service]
+      Type=oneshot
+      RemainAfterExit=yes
+      ExecStart=/opt/dpv/scripts/boot.sh
+      TimeoutStartSec=600
+
+      [Install]
+      WantedBy=multi-user.target
+
+runcmd:
+  - systemctl enable --now docker
+
+  # Azure CLI (needed for managed-identity secret fetches below)
+  - curl -sL https://aka.ms/InstallAzureCLIDeb | bash
+
+  - az login --identity --allow-no-subscriptions
+
+  # Ubuntu Pro: attached once here for Livepatch + extended ESM
+  - export UBUNTU_PRO_TOKEN="$(az keyvault secret show --vault-name ${key_vault_name} --name ubuntu-pro-token --query value -o tsv)"
+  - pro attach "$UBUNTU_PRO_TOKEN" || true
+
+  # Deploy key for cloning this repo — private key only ever touches Key
+  # Vault + this file, never the repo itself.
+  - mkdir -p /root/.ssh
+  - chmod 700 /root/.ssh
+  - az keyvault secret show --vault-name ${key_vault_name} --name git-deploy-key-private --query value -o tsv > /root/.ssh/id_ed25519
+  - chmod 600 /root/.ssh/id_ed25519
+  - ssh-keyscan -t ed25519 github.com >> /root/.ssh/known_hosts 2>/dev/null
+
+  # Format + mount the Premium SSD v2 data disk (LUN 0 → stable by-lun path)
+  - mkdir -p /mnt/postgres-data
+  - |
+    DEV=/dev/disk/azure/scsi1/lun0
+    if ! blkid "$DEV" >/dev/null 2>&1; then mkfs.ext4 -F "$DEV"; fi
+    grep -q postgres-data /etc/fstab || echo "$DEV /mnt/postgres-data ext4 defaults,nofail 0 2" >> /etc/fstab
+    mount -a
+  - chown -R 999:999 /mnt/postgres-data
+
+  # Clone the repo (public half of the deploy key must already be added on
+  # GitHub — see README)
+  - mkdir -p /opt/dpv
+  - GIT_SSH_COMMAND="ssh -i /root/.ssh/id_ed25519 -o IdentitiesOnly=yes -o StrictHostKeyChecking=accept-new" git clone ${github_repo_ssh_url} /opt/dpv/repo
+  - ln -sfn /opt/dpv/repo/compose /opt/dpv/compose
+  - ln -sfn /opt/dpv/repo/scripts /opt/dpv/scripts
+  - mkdir -p /opt/dpv/compose/postgres
+  - cp /opt/staging/pgbackrest.conf /opt/dpv/compose/postgres/pgbackrest.conf
+  - chmod +x /opt/dpv/scripts/*.sh
+
+  # boot.sh refreshes secrets from Key Vault and brings the stack up — used
+  # both for this first boot and by the systemd unit on every later boot.
+  - |
+    cat > /opt/dpv/scripts/boot.sh <<'EOS'
+    #!/usr/bin/env bash
+    set -euo pipefail
+    az login --identity --allow-no-subscriptions >/dev/null
+    /opt/dpv/scripts/fetch-secrets.sh "${key_vault_name}" "${domain_auth}" "${letsencrypt_email}"
+    cd /opt/dpv/compose
+    docker compose -f docker-compose.yml -f docker-compose.postgres.yml -f docker-compose.keycloak.yml up -d --build
+    EOS
+  - chmod +x /opt/dpv/scripts/boot.sh
+
+  - systemctl daemon-reload
+  - systemctl enable --now dpv-compose.service
+
+  # Nightly full backup (continuous WAL archiving handles the gaps in between)
+  - echo "0 2 * * * root /opt/dpv/scripts/pgbackrest-full-backup.sh >> /var/log/pgbackrest-full.log 2>&1" > /etc/cron.d/pgbackrest-full
+  - chmod 644 /etc/cron.d/pgbackrest-full
