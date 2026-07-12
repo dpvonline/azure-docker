@@ -1,13 +1,16 @@
 #!/usr/bin/env bash
-# Pulls runtime secrets from Key Vault via the VM's managed identity and
-# writes compose/.env + compose/init-db.sql. Run at boot (cloud-init) and
+# Pulls runtime secrets/config from Key Vault via the VM's managed identity
+# and writes compose/.env + compose/init-db.sql. Run at boot (cloud-init) and
 # again by a systemd unit on every subsequent boot/reboot, so nothing is
 # ever hand-entered or persisted outside Key Vault.
+#
+# DOMAIN_AUTH/LETSENCRYPT_EMAIL live in Key Vault too (not passed as args)
+# specifically so changing them is just `terraform apply` (updates the
+# secret) + `systemctl restart dpv-compose.service` on the VM — no VM
+# replacement, since nothing here is baked into custom_data.
 set -euo pipefail
 
 VAULT_NAME="$1"
-DOMAIN_AUTH="$2"
-LETSENCRYPT_EMAIL="$3"
 COMPOSE_DIR="/opt/dpv/compose"
 
 az login --identity --allow-no-subscriptions >/dev/null
@@ -16,6 +19,8 @@ get_secret() {
   az keyvault secret show --vault-name "${VAULT_NAME}" --name "$1" --query value -o tsv
 }
 
+DOMAIN_AUTH="$(get_secret domain-auth)"
+LETSENCRYPT_EMAIL="$(get_secret letsencrypt-email)"
 POSTGRES_SUPERUSER_PASSWORD="$(get_secret postgres-superuser-password)"
 POSTGRES_KEYCLOAK_PASSWORD="$(get_secret postgres-keycloak-password)"
 KEYCLOAK_ADMIN_PASSWORD="$(get_secret keycloak-admin-password)"

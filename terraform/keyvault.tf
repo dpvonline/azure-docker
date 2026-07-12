@@ -73,3 +73,20 @@ resource "azurerm_key_vault_secret" "ubuntu_pro_token" {
   key_vault_id = azurerm_key_vault.core.id
   depends_on   = [azurerm_role_assignment.deployer_kv_officer]
 }
+
+# Not secret in the usual sense, but stored here (rather than baked into
+# custom_data) so changing them is just "terraform apply" + a service
+# restart on the VM — no VM replacement needed. See fetch-secrets.sh.
+resource "azurerm_key_vault_secret" "domain_auth" {
+  name         = "domain-auth"
+  value        = var.DOMAIN_AUTH
+  key_vault_id = azurerm_key_vault.core.id
+  depends_on   = [azurerm_role_assignment.deployer_kv_officer]
+}
+
+resource "azurerm_key_vault_secret" "letsencrypt_email" {
+  name         = "letsencrypt-email"
+  value        = var.LETSENCRYPT_EMAIL
+  key_vault_id = azurerm_key_vault.core.id
+  depends_on   = [azurerm_role_assignment.deployer_kv_officer]
+}

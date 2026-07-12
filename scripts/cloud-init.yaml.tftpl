@@ -107,7 +107,7 @@ runcmd:
     #!/usr/bin/env bash
     set -euo pipefail
     az login --identity --allow-no-subscriptions >/dev/null
-    /opt/dpv/scripts/fetch-secrets.sh "${key_vault_name}" "${domain_auth}" "${letsencrypt_email}"
+    /opt/dpv/scripts/fetch-secrets.sh "${key_vault_name}"
     cd /opt/dpv/compose
     docker compose up -d --build
     EOS
