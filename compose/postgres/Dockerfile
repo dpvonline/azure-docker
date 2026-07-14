@@ -1,4 +1,4 @@
-FROM postgres:17
+FROM postgres:18
 
 # pgBackRest lives inside the same container as Postgres so archive_command
 # can invoke it directly, without cross-container exec gymnastics.
