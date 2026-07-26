@@ -349,6 +349,20 @@ Confluence-Home und die OS-Platte brauchen eine eigene Sicherung, dafür steht
 (vor dem 02:00-pgBackRest-Lauf und dem Sonntags-Update um 03:30), Aufbewahrung 14 Tage
 täglich / 6 Wochen / 6 Monate.
 
+Die Policy ist zwingend eine **Enhanced Policy** (`policy_type = "V2"`). Die
+Standard-Policy kann VMs mit Premium-SSD-v2- oder Ultra-Datenplatten überhaupt nicht
+sichern und scheitert beim Anlegen des Protected Items mit
+`UserErrorUltraAndPremiumSSDv2DiskNotSupportedWithStandardPolicy` — zwei der drei
+Datenplatten hier sind Premium v2, Standard ist also keine Option. Das lässt sich
+nachträglich auch nicht umstellen: Azure erlaubt keinen Typwechsel an einer bestehenden
+Policy, und ein Protected Item kann nicht zwischen Standard und Enhanced wandern; beides
+müsste neu angelegt werden.
+
+Enhanced erlaubt bis zu 30 Tage Instant-Restore-Snapshots (Standard nur 5); hier sind es
+**7 Tage**. Diese Snapshots liegen neben den Platten und machen eine Rücksicherung am
+selben Tag schnell, werden aber als Snapshot-Speicher berechnet — bei ~150 GB
+Nextcloud-Daten ist das der Punkt, an dem eine längere Aufbewahrung merklich Geld kostet.
+
 Zwei Eigenschaften, die im Ernstfall zählen:
 
 - **Alle Platten in einem Wiederherstellungspunkt**, zum selben Zeitpunkt aufgenommen —

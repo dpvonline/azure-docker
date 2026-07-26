@@ -35,12 +35,30 @@ resource "azurerm_backup_policy_vm" "daily" {
   resource_group_name = azurerm_resource_group.core.name
   recovery_vault_name = azurerm_recovery_services_vault.core.name
 
+  # MUST be an Enhanced policy ("V2"). The default Standard policy cannot
+  # protect a VM that has Premium SSD v2 or Ultra data disks at all — it fails
+  # with UserErrorUltraAndPremiumSSDv2DiskNotSupportedWithStandardPolicy when
+  # the protected item is created (hit in a real deploy). Two of the three data
+  # disks here are PremiumV2_LRS, so Standard is simply not an option.
+  #
+  # Note this cannot be flipped in place later: Azure does not allow changing an
+  # existing policy's type, and a protected item cannot move between a Standard
+  # and an Enhanced policy — both would have to be recreated.
+  policy_type = "V2"
+
   # 01:00 UTC — before the 02:00 pgbackrest full backup and the Sunday 03:30
   # container update run, so a night's snapshot is never taken mid-update.
   backup {
     frequency = "Daily"
     time      = "01:00"
   }
+
+  # Enhanced policies allow up to 30 days of instant-restore snapshots (Standard
+  # caps at 5). These snapshots live next to the disks and are what makes a
+  # same-day restore fast, but they are billed as snapshot storage — 7 days is
+  # the balance between a quick restore window and paying for ~150 GB of
+  # Nextcloud data several times over.
+  instant_restore_retention_days = 7
 
   retention_daily {
     count = 14
