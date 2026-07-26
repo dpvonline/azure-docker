@@ -67,28 +67,46 @@ runcmd:
   - chmod 600 /root/.ssh/id_ed25519
   - ssh-keyscan -t ed25519 github.com >> /root/.ssh/known_hosts 2>/dev/null
 
-  # Format + mount the Premium SSD v2 data disk. The exact /dev/disk/azure/...
-  # path varies by controller, so try known candidates and retry briefly
-  # instead of assuming one fixed path; dump lsblk if none show up so the
-  # failure is diagnosable from cloud-init-output.log.
-  - mkdir -p /mnt/postgres-data
+  # Format + mount the three data disks under /data, addressed by LUN (the LUN
+  # numbers are assigned in terraform/vm.tf). The exact /dev/disk/azure/... path
+  # varies by controller, so try known candidates and retry briefly instead of
+  # assuming one fixed path; dump lsblk if none show up so the failure is
+  # diagnosable from cloud-init-output.log.
+  #
+  # Deliberately NOT under /mnt: on VM sizes that have a temporary disk, the
+  # Azure agent mounts that ephemeral volume at /mnt, which makes it a
+  # well-known way to lose persistent data placed underneath it.
+  # Standard_B4as_v2 has no temp disk at all, and /data additionally matches
+  # the layout the nextcloud-config repo already uses.
   - |
-    DEV=""
-    for candidate in /dev/disk/azure/scsi1/lun0 /dev/disk/azure/scsi0/lun0 /dev/disk/azure/data/by-lun/0; do
+    mount_lun() {
+      LUN="$1"; MOUNT="$2"; DEV=""
+      # Retry loop outside, candidates inside: waiting out the full 60s on one
+      # path before even trying the next would delay boot by minutes per disk
+      # when the device simply shows up under a different name.
       for i in $(seq 1 30); do
-        if [ -e "$candidate" ]; then DEV="$candidate"; break 2; fi
+        for candidate in "/dev/disk/azure/scsi1/lun$LUN" "/dev/disk/azure/scsi0/lun$LUN" "/dev/disk/azure/data/by-lun/$LUN"; do
+          if [ -e "$candidate" ]; then DEV="$candidate"; break 2; fi
+        done
         sleep 2
       done
-    done
-    if [ -z "$DEV" ]; then
-      echo "ERROR: no data disk found under known /dev/disk/azure paths after waiting" | tee -a /var/log/dpv-boot-warnings.log
-      lsblk | tee -a /var/log/dpv-boot-warnings.log
-    else
+      if [ -z "$DEV" ]; then
+        echo "ERROR: no data disk for LUN $LUN found under known /dev/disk/azure paths after waiting" | tee -a /var/log/dpv-boot-warnings.log
+        lsblk | tee -a /var/log/dpv-boot-warnings.log
+        return 1
+      fi
       if ! blkid "$DEV" >/dev/null 2>&1; then mkfs.ext4 -F "$DEV"; fi
-      grep -q postgres-data /etc/fstab || echo "$DEV /mnt/postgres-data ext4 defaults,nofail 0 2" >> /etc/fstab
-      mount -a
-    fi
-  - chown -R 999:999 /mnt/postgres-data
+      mkdir -p "$MOUNT"
+      grep -q " $MOUNT " /etc/fstab || echo "$DEV $MOUNT ext4 defaults,nofail 0 2" >> /etc/fstab
+      mountpoint -q "$MOUNT" || mount "$MOUNT"
+    }
+    mkdir -p /data
+    mount_lun 0 /data/postgres
+    mount_lun 1 /data/apps
+    mount_lun 2 /data/nextcloud
+  # 999 is the postgres user inside the container. The other two disks get
+  # their ownership when the applications using them arrive (see MIGRATION.md).
+  - chown -R 999:999 /data/postgres
 
   # Clone the repo (public half of the deploy key must already be added on
   # GitHub — see README)

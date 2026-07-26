@@ -1,7 +1,7 @@
 services:
   postgres:
     build: ./postgres
-    image: dpv-postgres:17-pgbackrest
+    image: dpv-postgres:18-pgbackrest
     restart: unless-stopped
     networks:
       - dpv
@@ -22,7 +22,12 @@ services:
       - "-c"
       - "archive_timeout=600"
     volumes:
-      - /mnt/postgres-data:/var/lib/postgresql/data
+      - /data/postgres:/var/lib/postgresql/data
       - ./init-db.sql:/docker-entrypoint-initdb.d/init-db.sql:ro
-    # No `ports:` — only reachable from other containers on the "dpv" network,
-    # never exposed on the host's public interface.
+    # Bound to the loopback interface only — NOT reachable from outside the VM
+    # (the NSG blocks 5432 anyway, but binding to 127.0.0.1 means it never
+    # listens on the public interface in the first place). This exists so an
+    # admin can reach the database with a local GUI client through an SSH
+    # tunnel: ssh -L 5432:localhost:5432 dpvadmin@<vm-ip>  (see README).
+    ports:
+      - "127.0.0.1:5432:5432"

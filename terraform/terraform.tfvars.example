@@ -7,8 +7,10 @@ ADMIN_USERNAME       = "dpvadmin"
 ADMIN_SSH_PUBLIC_KEY = "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIDhPsdQzx+LBPyrUXAjnXYhugXmEpJNIYcWOSj3UIZoh dpvadmin@vm-dpv-core"
 ADMIN_IP_CIDRS       = ["203.0.113.10/32"] # deine eigene öffentliche IP, /32
 
-VM_SIZE                = "Standard_B2ms"
-POSTGRES_DISK_SIZE_GB   = 32
+VM_SIZE                = "Standard_B4as_v2" # v2-B-Serie: 6400 IOPS statt 2880 beim alten B4ms, und günstiger
+POSTGRES_DISK_SIZE_GB  = 32
+APPS_DISK_SIZE_GB      = 64  # Confluence-Home, Nextcloud-App-Verzeichnis, Redis
+NEXTCLOUD_DISK_SIZE_GB = 256 # Nextcloud-Nutzerdaten; online vergrößerbar, aber nie verkleinerbar
 
 KEY_VAULT_NAME              = "dpv-core-kv01"     # global eindeutig
 BACKUP_STORAGE_ACCOUNT_NAME = "dpvbackups01"      # global eindeutig, nur a-z0-9
@@ -20,5 +22,12 @@ UBUNTU_PRO_TOKEN = "C1abcDEFghiJKLmnoPQRstuVWXyz123"  # von ubuntu.com/pro, kost
 
 GITHUB_REPO_SSH_URL = "git@github.com:dpvonline/azure-docker.git"
 
-OLD_REPO_RESOURCE_GROUP = "Infra"
-ACR_NAME                = "biber"
+OLD_REPO_RESOURCE_GROUP = "Infra" # nur noch für die scout-tools.de-DNS-Zone
+
+# Optional: Entra-Gruppe, die die Key-Vault-Secrets lesen darf. Anlegen mit
+#   az ad group create --display-name "DPV Infra Admins" --mail-nickname dpv-infra-admins
+# Ohne das kommt nur das Konto an die Passwörter, das terraform apply ausführt.
+# ADMIN_GROUP_OBJECT_ID = "00000000-0000-0000-0000-000000000000"
+
+# Empfänger für Platten- und CPU-Credit-Alerts
+ALERT_EMAIL = "cloudadmin@dpvonline.de"

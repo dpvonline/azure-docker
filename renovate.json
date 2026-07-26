@@ -5,6 +5,7 @@
   ],
   "timezone": "UTC",
   "schedule": ["before 6am on sunday"],
+  "minimumReleaseAge": "7 days",
   "packageRules": [
     {
       "description": "Patch/minor bumps are safe to roll out unattended — the weekly VM update run (scripts/update-containers.sh) takes a fresh backup and health-checks before/after.",

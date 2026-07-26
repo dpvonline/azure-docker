@@ -23,14 +23,37 @@ variable "ADMIN_IP_CIDRS" {
   description = "CIDR ranges allowed to reach port 22 (SSH). Keep this tight — e.g. your home/office IP with /32."
 }
 
+# Standard_B4as_v2: 4 vCPU, 16 GiB, 6400 disk IOPS / 145 MBps, no temp disk.
+# Deliberately the v2 B-series — the older B4ms caps at 2880 IOPS / 35 MBps,
+# i.e. below a single Premium v2 disk's baseline, and costs more. D4as_v5 has
+# identical disk limits but dedicated (non-burstable) CPU for ~26 $/month
+# more; switch if the CPU-credit alert in monitoring.tf keeps firing.
 variable "VM_SIZE" {
   type    = string
-  default = "Standard_B2ms"
+  default = "Standard_B4as_v2"
 }
 
 variable "POSTGRES_DISK_SIZE_GB" {
   type    = number
   default = 32
+}
+
+variable "APPS_DISK_SIZE_GB" {
+  type        = number
+  default     = 64
+  description = "Confluence home, Nextcloud application directory, Redis"
+}
+
+variable "NEXTCLOUD_DISK_SIZE_GB" {
+  type        = number
+  default     = 256
+  description = "Nextcloud user files — ~150 GB migrate off Lightsail, the rest is headroom (Azure disks expand online but never shrink)"
+}
+
+variable "ADMIN_GROUP_OBJECT_ID" {
+  type        = string
+  default     = null
+  description = "Optional Entra ID group granted read access to Key Vault secrets, so looking up a database password does not depend on the one account that runs terraform. Create with: az ad group create --display-name 'DPV Infra Admins' --mail-nickname dpv-infra-admins"
 }
 
 variable "KEY_VAULT_NAME" {
@@ -53,6 +76,11 @@ variable "LETSENCRYPT_EMAIL" {
   description = "Contact address Caddy hands to Let's Encrypt"
 }
 
+variable "ALERT_EMAIL" {
+  type        = string
+  description = "Recipient for disk-fill and CPU-credit alerts (see monitoring.tf)"
+}
+
 variable "UBUNTU_PRO_TOKEN" {
   type        = string
   sensitive   = true
@@ -67,12 +95,7 @@ variable "GITHUB_REPO_SSH_URL" {
 variable "OLD_REPO_RESOURCE_GROUP" {
   type        = string
   default     = "Infra"
-  description = "Resource group of the existing azure-infrastructure repo, where the shared ACR lives"
-}
-
-variable "ACR_NAME" {
-  type    = string
-  default = "biber"
+  description = "Resource group of the existing azure-infrastructure repo, where the scout-tools.de DNS zone lives. Goes away once the production cutover moves off that test domain (see MIGRATION.md, phase 5)."
 }
 
 variable "TAGS" {

@@ -53,7 +53,11 @@ if [ "$NEW_COMMIT" = "$PREV_COMMIT" ]; then
 fi
 
 log "pulling new images..."
-if ! docker compose pull >>"$LOG_FILE" 2>&1; then
+# --ignore-buildable: postgres has both `build:` and `image:` (locally built,
+# no registry counterpart) — without this flag, `pull` always fails trying to
+# fetch it, triggering a spurious rollback on every run regardless of whether
+# postgres actually changed.
+if ! docker compose pull --ignore-buildable >>"$LOG_FILE" 2>&1; then
   rollback
 fi
 
