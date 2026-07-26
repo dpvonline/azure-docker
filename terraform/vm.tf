@@ -4,7 +4,7 @@
 # included — so splitting Postgres and the application data gives roughly
 # double the usable IOPS at the same storage cost.
 #
-# That only pays off because the VM is a Standard_B4as_v2 (6400 IOPS /
+# That only pays off because the VM is a Standard_B4s_v2 (6400 IOPS /
 # 145 MBps). On the older B-series (B4ms: 2880 IOPS / 35 MBps) the VM caps
 # below a single disk's baseline and the split would buy nothing — see
 # MIGRATION.md before changing VM_SIZE.

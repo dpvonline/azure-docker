@@ -7,7 +7,7 @@ ADMIN_USERNAME       = "dpvadmin"
 ADMIN_SSH_PUBLIC_KEY = "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIDhPsdQzx+LBPyrUXAjnXYhugXmEpJNIYcWOSj3UIZoh dpvadmin@vm-dpv-core"
 ADMIN_IP_CIDRS       = ["203.0.113.10/32"] # deine eigene öffentliche IP, /32
 
-VM_SIZE                = "Standard_B4as_v2" # v2-B-Serie: 6400 IOPS statt 2880 beim alten B4ms, und günstiger
+VM_SIZE                = "Standard_B4s_v2" # v2-B-Serie: 6400 IOPS statt 2880 beim alten B4ms. B4as_v2 (AMD) ist identisch und günstiger, braucht aber Basv2-Quota
 POSTGRES_DISK_SIZE_GB  = 32
 APPS_DISK_SIZE_GB      = 64  # Confluence-Home, Nextcloud-App-Verzeichnis, Redis
 NEXTCLOUD_DISK_SIZE_GB = 256 # Nextcloud-Nutzerdaten; online vergrößerbar, aber nie verkleinerbar

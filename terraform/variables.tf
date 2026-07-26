@@ -23,14 +23,24 @@ variable "ADMIN_IP_CIDRS" {
   description = "CIDR ranges allowed to reach port 22 (SSH). Keep this tight — e.g. your home/office IP with /32."
 }
 
-# Standard_B4as_v2: 4 vCPU, 16 GiB, 6400 disk IOPS / 145 MBps, no temp disk.
+# Standard_B4s_v2: 4 vCPU, 16 GiB, 6400 disk IOPS / 145 MBps, no temp disk.
+#
 # Deliberately the v2 B-series — the older B4ms caps at 2880 IOPS / 35 MBps,
-# i.e. below a single Premium v2 disk's baseline, and costs more. D4as_v5 has
-# identical disk limits but dedicated (non-burstable) CPU for ~26 $/month
-# more; switch if the CPU-credit alert in monitoring.tf keeps firing.
+# i.e. below a single Premium v2 disk's baseline, and costs more.
+#
+# The AMD-based sibling Standard_B4as_v2 is functionally identical (every one
+# of the ~28 capabilities Azure reports matches, only the silicon differs) and
+# ~14 $/month cheaper, but this subscription's "Standard Basv2 Family vCPUs"
+# quota is 3 — one short of the 4 needed — while "Standard Bsv2 Family vCPUs"
+# sits at 65. Switching back is this one line plus a reboot (VM_SIZE is not
+# part of custom_data, so no VM rebuild) if that quota is ever raised.
+#
+# D4as_v5 has identical disk limits but dedicated (non-burstable) CPU for
+# ~12 $/month more than this; switch if the CPU-credit alert in monitoring.tf
+# keeps firing.
 variable "VM_SIZE" {
   type    = string
-  default = "Standard_B4as_v2"
+  default = "Standard_B4s_v2"
 }
 
 variable "POSTGRES_DISK_SIZE_GB" {

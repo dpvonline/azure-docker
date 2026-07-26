@@ -22,7 +22,7 @@ Compose-Dateien, keine Neuinstallation.
 
 ## Zielbild
 
-Eine VM (`Standard_B4as_v2`), ein Postgres, ein Reverse Proxy (Caddy), drei Platten:
+Eine VM (`Standard_B4s_v2`), ein Postgres, ein Reverse Proxy (Caddy), drei Platten:
 
 | Platte | Typ | Größe | Mount | Inhalt |
 |---|---|---|---|---|
@@ -96,13 +96,18 @@ jede weitere App manuelles DDL per `psql`.
 
 4. **Mounts von `/mnt/...` nach `/data/...`.** Auf VM-Größen mit Temp-Disk hängt Azures
    waagent die *ephemere* Platte nach `/mnt` — persistente Daten dort abzulegen ist ein
-   bekannter Fallstrick. `Standard_B4as_v2` hat gar keine Temp-Disk mehr, und
+   bekannter Fallstrick. `Standard_B4s_v2` hat gar keine Temp-Disk mehr, und
    `/data/...` passt zu dem, was `nextcloud-config` schon verwendet.
 
-5. **`VM_SIZE` → `Standard_B4as_v2`** (4 vCPU, 16 GiB, 6.400 IOPS, 145 MB/s, ~126 $/Mon).
-   Gegenüber `B4ms` (2.880 IOPS, 35 MB/s, ~140 $) mehr als doppelte Disk-Leistung bei
-   geringerem Preis; gegenüber `D4as_v5` (~152 $) identische Disk-Limits, aber
-   burstable CPU statt dedizierter.
+5. **`VM_SIZE` → `Standard_B4s_v2`** (4 vCPU, 16 GiB, 6.400 IOPS, 145 MB/s, ~140 $/Mon).
+   Gegenüber `B4ms` (2.880 IOPS, 35 MB/s, gleicher Preis) mehr als doppelte
+   Disk-Leistung; gegenüber `D4as_v5` (~152 $) identische Disk-Limits, aber burstable
+   CPU statt dedizierter.
+   Das AMD-Pendant `B4as_v2` ist auf **jedem** von Azure ausgewiesenen Attribut
+   identisch und ~14 $/Mon günstiger, scheitert hier aber an der Quota: „Standard Basv2
+   Family vCPUs" steht auf 3, gebraucht werden 4 (Bsv2 dagegen auf 65). Falls die Quota
+   je erhöht wird, ist der Wechsel eine Zeile in `tfvars` plus Neustart — `VM_SIZE`
+   steckt nicht in `custom_data`, es braucht also keinen VM-Neuaufbau.
 
 6. **Platten 2 und 3 anlegen** plus Mount-Logik in `cloud-init.yaml.tftpl`. Erst mit
    6.400 IOPS lohnt die Aufteilung: 3.000 + 3.000 + 500 Baseline gegen 6.400 VM-Limit.
@@ -335,7 +340,7 @@ geklärt sein:
 |---|---|---|
 | AKS-Cluster | entfällt | – |
 | Lightsail | entfällt | – |
-| VM `Standard_B4as_v2` | – | ~126 $/Mon |
+| VM `Standard_B4s_v2` | – | ~140 $/Mon |
 | Platten (32 + 64 GiB Premium v2, 256 GiB Standard SSD) | – | ~26 $/Mon |
 | Azure Backup | – | ~15–20 €/Mon |
 | Blob (pgBackRest) | – | wenige € |

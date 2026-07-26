@@ -21,15 +21,23 @@ Rollback) — siehe unten.
 
 ## Architektur
 
-- **1 Azure VM** (Ubuntu 24.04 LTS, **Standard_B4as_v2**), non-spot, Docker Compose
+- **1 Azure VM** (Ubuntu 24.04 LTS, **Standard_B4s_v2**), non-spot, Docker Compose
   betreibt Caddy + Keycloak + Postgres. Bewusst die **v2**-B-Serie: die alte
   (`B4ms`) deckelt den Plattendurchsatz bei 2.880 IOPS / 35 MB/s — unterhalb der
-  Baseline einer einzigen Premium-v2-Platte — und kostet dabei mehr. `D4as_v5` hätte
-  identische Plattenwerte, aber dedizierte statt burstbarer CPU für ~26 $/Monat mehr;
-  der Wechsel lohnt, sobald der CPU-Credit-Alert regelmäßig auslöst.
+  Baseline einer einzigen Premium-v2-Platte — und das bei identischem Preis
+  (~140 $/Monat). `D4as_v5` hätte dieselben Plattenwerte, aber dedizierte statt
+  burstbarer CPU für ~12 $/Monat mehr; der Wechsel lohnt, sobald der CPU-Credit-Alert
+  regelmäßig auslöst.
+
+  Das AMD-Pendant `B4as_v2` ist technisch identisch (jedes von Azure ausgewiesene
+  Attribut stimmt überein, nur das Silizium unterscheidet sich) und ~14 $/Monat
+  günstiger, scheitert in diesem Abo aber an der Quota: *Standard Basv2 Family vCPUs*
+  steht auf 3, gebraucht werden 4 — *Standard Bsv2 Family vCPUs* dagegen auf 65. Wird
+  die Quota erhöht, ist der Wechsel eine Zeile in `terraform.tfvars` plus Neustart;
+  `VM_SIZE` steckt nicht in `custom_data`, es braucht also keinen VM-Neuaufbau.
 - **Drei Datenplatten**, alle unter `/data` (nicht unter `/mnt` — dort hängt der Azure-
   Agent auf Größen mit Temp-Disk den *flüchtigen* Datenträger ein, was ein bekannter
-  Weg ist, persistente Daten zu verlieren; `B4as_v2` hat gar keine Temp-Disk):
+  Weg ist, persistente Daten zu verlieren; `B4s_v2` hat gar keine Temp-Disk):
 
   | LUN | Mount | Typ | Größe | Inhalt |
   |---|---|---|---|---|
