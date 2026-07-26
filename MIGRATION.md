@@ -79,10 +79,14 @@ jede weitere App manuelles DDL per `psql`.
    lokal gebaut wird und in keiner Registry existiert; das löst ein unnötiges Rollback
    aus. (Bereits im Arbeitsverzeichnis umgesetzt, noch nicht gemergt.)
 
-2. **Postgres 18, frisches Cluster.** Dockerfile auf `postgres:18`, Datenverzeichnis
-   leeren, neu initialisieren. Kein `pg_upgrade`, kein Dump/Restore — die Keycloak-
-   Daten auf der VM sind Wegwerfdaten aus `keycloak.dump`, die echten kommen erst beim
-   Cutover.
+2. **Postgres 18, frisches Cluster.** Dockerfile auf `postgres:18`, und die Datenplatte
+   gleich mit ersetzen lassen:
+   `terraform apply -replace=azurerm_managed_disk.postgres_data`. Dann formatiert
+   cloud-init eine leere Platte und Postgres initialisiert neu — kein `pg_upgrade`, kein
+   Dump/Restore, nichts von Hand zu löschen. Die Keycloak-Daten auf der VM sind
+   Wegwerfdaten aus `keycloak.dump`, die echten kommen erst beim Cutover.
+   **Kein `terraform destroy`**: die Purge Protection des Key Vaults würde den Namen
+   sieben Tage blockieren (siehe README).
 
 3. **`init-db.sql.template` um alle Datenbanken erweitern** — `keycloak`, `confluence`,
    `nextcloud`, jeweils mit eigener Rolle. Passwörter als neue Key-Vault-Secrets

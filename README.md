@@ -78,16 +78,34 @@ Rollback) — siehe unten.
 > wieder der normale aus der Setup-Reihenfolge weiter unten.
 
 Der Sprung von Postgres 17 auf 18 ist **kein** Image-Tausch: das Datenverzeichnis-Format
-ändert sich zwischen Hauptversionen. Und `terraform apply` löst das nicht mit — die
-Datenplatte überlebt den VM-Neuaufbau absichtlich, also liegt danach das alte
+ändert sich zwischen Hauptversionen. Ein normales `terraform apply` löst das nicht mit —
+die Datenplatte überlebt den VM-Neuaufbau absichtlich, also läge danach das alte
 17er-Verzeichnis unter dem neuen Mount und Postgres 18 startet nicht, sondern läuft in
 eine Restart-Schleife.
 
 Das ist hier unkritisch, weil auf der VM bisher nur Wegwerf-Keycloak-Daten aus
 `keycloak.dump` liegen — die echten Daten kommen erst beim Cutover (siehe
-[MIGRATION.md](MIGRATION.md)). Deshalb: leeren statt migrieren, kein `pg_upgrade`.
+[MIGRATION.md](MIGRATION.md)). Deshalb: neu anfangen statt migrieren, kein `pg_upgrade`.
 
-Nach dem `terraform apply` auf der neuen VM:
+Der saubere Weg ist, die Datenplatte gleich mit ersetzen zu lassen:
+
+```bash
+terraform apply -replace=azurerm_managed_disk.postgres_data
+```
+
+Damit hängt am neuen Boot eine leere Platte, cloud-init formatiert sie (`blkid` findet
+kein Dateisystem → `mkfs.ext4`), und Postgres initialisiert ein frisches Cluster — ohne
+dass irgendwo von Hand gelöscht werden muss.
+
+> ⚠️ **Kein `terraform destroy`**, auch nicht „weil eh nichts drauf ist". Der Key Vault
+> hat `purge_protection_enabled = true` bei 7 Tagen Aufbewahrung. Purge Protection lässt
+> sich nicht abschalten, und ein soft-deleted Vault kann vor Ablauf der Frist nicht
+> gepurgt werden — der Name `dpv-core-kv01` bliebe also eine Woche blockiert und das
+> anschließende `apply` würde daran scheitern. `-replace` auf die einzelne Ressource
+> erreicht dasselbe ohne diesen Nebeneffekt.
+
+Falls das `apply` doch ohne `-replace` gelaufen ist und Postgres deshalb in der
+Restart-Schleife hängt, geht es auch nachträglich:
 
 ```bash
 cd /opt/dpv/compose
