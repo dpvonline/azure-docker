@@ -9,25 +9,60 @@ hier funktioniert und der DNS-Cutover erfolgt ist).
 Dieser erste Ausbau deckt bewusst nur ab: VM, Netzwerk, Key Vault, Postgres (self-hosted
 im Container + pgBackRest-Backups gegen Azure Blob), Keycloak, Caddy (automatisches HTTPS).
 
-**Noch nicht enthalten** (spätere Schritte): Confluence, Nextcloud, Redis, Biber-Backend,
-Standby-VM/Failover, automatisierte DNS-Umstellung für dpvonline.de.
+**Noch nicht enthalten** (spätere Schritte): Confluence, Nextcloud, Redis,
+Standby-VM/Failover, automatisierte DNS-Umstellung für dpvonline.de. Das Biber-Backend
+wird nicht mehr gebraucht und entfällt ersatzlos.
+
+Wie diese Dienste von AKS bzw. AWS Lightsail hierher kommen, steht in
+**[MIGRATION.md](MIGRATION.md)** — Phasen, Cutover-Fenster, Rollback pro Schritt.
 
 Container-Updates sind seitdem automatisiert (Renovate + wöchentlicher Rollout mit
 Rollback) — siehe unten.
 
 ## Architektur
 
-- **1 Azure VM** (Ubuntu 24.04 LTS, Standard_B2ms), non-spot, Docker Compose betreibt
-  Caddy + Keycloak + Postgres.
+- **1 Azure VM** (Ubuntu 24.04 LTS, **Standard_B4s_v2**), non-spot, Docker Compose
+  betreibt Caddy + Keycloak + Postgres. Bewusst die **v2**-B-Serie: die alte
+  (`B4ms`) deckelt den Plattendurchsatz bei 2.880 IOPS / 35 MB/s — unterhalb der
+  Baseline einer einzigen Premium-v2-Platte — und das bei identischem Preis
+  (~140 $/Monat). `D4as_v5` hätte dieselben Plattenwerte, aber dedizierte statt
+  burstbarer CPU für ~12 $/Monat mehr; der Wechsel lohnt, sobald der CPU-Credit-Alert
+  regelmäßig auslöst.
+
+  Das AMD-Pendant `B4as_v2` ist technisch identisch (jedes von Azure ausgewiesene
+  Attribut stimmt überein, nur das Silizium unterscheidet sich) und ~14 $/Monat
+  günstiger, scheitert in diesem Abo aber an der Quota: *Standard Basv2 Family vCPUs*
+  steht auf 3, gebraucht werden 4 — *Standard Bsv2 Family vCPUs* dagegen auf 65. Wird
+  die Quota erhöht, ist der Wechsel eine Zeile in `terraform.tfvars` plus Neustart;
+  `VM_SIZE` steckt nicht in `custom_data`, es braucht also keinen VM-Neuaufbau.
+- **Drei Datenplatten**, alle unter `/data` (nicht unter `/mnt` — dort hängt der Azure-
+  Agent auf Größen mit Temp-Disk den *flüchtigen* Datenträger ein, was ein bekannter
+  Weg ist, persistente Daten zu verlieren; `B4s_v2` hat gar keine Temp-Disk):
+
+  | LUN | Mount | Typ | Größe | Inhalt |
+  |---|---|---|---|---|
+  | 0 | `/data/postgres` | Premium SSD v2 | 32 GiB | Postgres |
+  | 1 | `/data/apps` | Premium SSD v2 | 64 GiB | Confluence-Home, Nextcloud-App, Redis |
+  | 2 | `/data/nextcloud` | Standard SSD | 256 GiB | Nextcloud-Nutzerdaten |
+
+  Getrennt statt eine große Platte, weil Premium v2 pro GiB abrechnet (kein Sockel je
+  Platte) und **jede** Platte ihre eigenen 3.000 IOPS Baseline mitbringt — die
+  Aufteilung verdoppelt also die nutzbaren IOPS zum gleichen Speicherpreis. Die
+  LUN-Nummern sind der Vertrag zwischen `terraform/vm.tf` und der Mount-Logik in
+  `scripts/cloud-init.yaml.tftpl`.
 - **Postgres läuft self-hosted** im Container (nicht als Azure Database for PostgreSQL) —
   der Hauptvorteil von Managed Postgres (DB übersteht VM-Verlust) greift erst mit einer
-  zweiten VM, was hier explizit nicht Teil der Kern-Phase ist. Datenverzeichnis liegt auf
-  einer separaten **Premium SSD v2**-Platte (schnell, persistent — nicht Azures flüchtiger
-  lokaler NVMe-Speicher).
-- **pgBackRest** sichert kontinuierlich (WAL-Archiving, `archive-timeout=600s` → maximal
-  10 Minuten Datenverlust im Idle-Fall, bei Schreibaktivität nahezu punktgenau) plus
-  täglichem Full-Backup gegen einen eigenen Azure-Blob-Storage-Container. Auth über
-  Managed Identity der VM (keine Keys auf der Platte).
+  zweiten VM, was hier explizit nicht Teil der Kern-Phase ist.
+- **Zwei Backup-Ebenen mit getrennten Aufgaben**: **pgBackRest** sichert Postgres
+  kontinuierlich (WAL-Archiving, `archive-timeout=600s` → maximal 10 Minuten
+  Datenverlust im Idle-Fall) plus täglichem Full-Backup gegen einen eigenen
+  Azure-Blob-Container, Auth über Managed Identity. **Azure Backup**
+  (`terraform/backup.tf`) sichert täglich die VM samt *aller* Platten in einem
+  gemeinsamen, untereinander konsistenten Wiederherstellungspunkt und kann einzelne
+  Dateien zurückholen. Details und der Wiederherstellungsablauf weiter unten.
+- **Alerting** (`terraform/monitoring.tf`) für die zwei Fehlerfälle, die sonst
+  unbemerkt bleiben: volllaufende Platte (per Azure Monitor Agent, da Azure nicht ins
+  Gast-Dateisystem sieht) und aufgebrauchte CPU-Credits der B-Serie.
 - **Azure Key Vault** hält alle Secrets (Postgres-Passwörter, Keycloak-Admin-Passwort,
   Ubuntu-Pro-Token, Git-Deploy-Key). Die VM zieht sie beim Boot per Managed Identity.
 - **Caddy** übernimmt automatisches Let's-Encrypt-HTTPS (HTTP-01), kein separates
@@ -41,20 +76,95 @@ Rollback) — siehe unten.
   `dpvonline.de` extern (nicht Azure DNS) — der Umstieg der A/AAAA-Records auf die neue
   VM-IP bleibt dann ein manueller Schritt, nicht Teil dieses Repos.
 - **Resource Group**: bewusst eine neue (`rg-dpv-core`), getrennt von `Infra` (dem alten
-  Repo) — nur die ACR-Rolle und jetzt der DNS-Record referenzieren `Infra` per `data`-Quelle,
-  nichts davon wird hier verändert oder mitverwaltet.
+  Repo) — nur noch der DNS-Record referenziert `Infra` per `data`-Quelle, nichts davon
+  wird hier verändert oder mitverwaltet. (Die ACR-Referenz gab es ausschließlich für das
+  Biber-Backend und ist mit diesem entfallen.)
+
+## Einmalige Umstellung auf Postgres 18 (Phase 0)
+
+> Gilt nur für das eine `apply`, das diese Änderung ausrollt. Danach ist der Ablauf
+> wieder der normale aus der Setup-Reihenfolge weiter unten.
+
+Der Sprung von Postgres 17 auf 18 ist **kein** Image-Tausch: das Datenverzeichnis-Format
+ändert sich zwischen Hauptversionen. Ein normales `terraform apply` löst das nicht mit —
+die Datenplatte überlebt den VM-Neuaufbau absichtlich, also läge danach das alte
+17er-Verzeichnis unter dem neuen Mount und Postgres 18 startet nicht, sondern läuft in
+eine Restart-Schleife.
+
+Das ist hier unkritisch, weil auf der VM bisher nur Wegwerf-Keycloak-Daten aus
+`keycloak.dump` liegen — die echten Daten kommen erst beim Cutover (siehe
+[MIGRATION.md](MIGRATION.md)). Deshalb: neu anfangen statt migrieren, kein `pg_upgrade`.
+
+Der saubere Weg ist, die Datenplatte gleich mit ersetzen zu lassen:
+
+```bash
+terraform apply -replace=azurerm_managed_disk.postgres_data
+```
+
+Damit hängt am neuen Boot eine leere Platte, cloud-init formatiert sie (`blkid` findet
+kein Dateisystem → `mkfs.ext4`), und Postgres initialisiert ein frisches Cluster — ohne
+dass irgendwo von Hand gelöscht werden muss.
+
+> ⚠️ **Kein `terraform destroy`**, auch nicht „weil eh nichts drauf ist". Der Key Vault
+> hat `purge_protection_enabled = true` bei 7 Tagen Aufbewahrung. Purge Protection lässt
+> sich nicht abschalten, und ein soft-deleted Vault kann vor Ablauf der Frist nicht
+> gepurgt werden — der Name `dpv-core-kv01` bliebe also eine Woche blockiert und das
+> anschließende `apply` würde daran scheitern. `-replace` auf die einzelne Ressource
+> erreicht dasselbe ohne diesen Nebeneffekt.
+
+Falls das `apply` doch ohne `-replace` gelaufen ist und Postgres deshalb in der
+Restart-Schleife hängt, geht es auch nachträglich:
+
+```bash
+cd /opt/dpv/compose
+sudo docker compose down
+sudo rm -rf /data/postgres/pgdata
+sudo docker compose up -d --build
+```
+
+Beim Hochfahren initialisiert Postgres ein frisches Cluster und führt dabei
+`init-db.sql` aus — das legt **alle** Datenbanken an (`keycloak`, `confluence`,
+`nextcloud`), auch die für noch nicht ausgerollte Anwendungen. Das ist Absicht: die
+Datei wird ausschließlich bei der Erstinitialisierung eines leeren Datenverzeichnisses
+gelesen, jede später fehlende Datenbank muss von Hand per `psql` nachgezogen werden.
+
+Danach die pgBackRest-Stanza zurücksetzen. Ein frisches Cluster hat eine neue
+Datenbank-System-ID, die nicht zu den Backups des alten 17er-Clusters im Blob-Repo
+passt — ein einfaches `stanza-create` scheitert deshalb mit einem Mismatch:
+
+```bash
+cd /opt/dpv/compose
+sudo docker compose exec --user postgres postgres pgbackrest --stanza=main --config=/etc/pgbackrest/pgbackrest.conf stop
+sudo docker compose exec --user postgres postgres pgbackrest --stanza=main --config=/etc/pgbackrest/pgbackrest.conf stanza-delete --force
+sudo docker compose exec --user postgres postgres pgbackrest --stanza=main --config=/etc/pgbackrest/pgbackrest.conf stanza-create
+sudo docker compose exec --user postgres postgres pgbackrest --stanza=main --config=/etc/pgbackrest/pgbackrest.conf start
+```
+
+Zum Schluss `keycloak.dump` wieder einspielen und prüfen:
+
+```bash
+sudo docker compose exec --user postgres postgres psql -c '\l'   # alle drei DBs da?
+sudo systemctl start dpv-update.service                          # läuft ohne Rollback durch?
+```
 
 ## Offene Punkte, die beim ersten echten Deploy zu prüfen sind
 
-- **Datenplatten-Gerätepfad**: cloud-init probiert beim Mounten mehrere bekannte
-  `/dev/disk/azure/...`-Pfade mit Retry (60s) durch und dumpt `lsblk` nach
-  `/var/log/dpv-boot-warnings.log`, falls keiner davon auftaucht. Sollte das
-  passieren: `lsblk` auf der VM prüfen und ggf. einen weiteren Pfad in
-  `scripts/cloud-init.yaml.tftpl` ergänzen.
+- **Datenplatten-Gerätepfad**: cloud-init mountet die drei Platten über ihre LUN
+  (`mount_lun 0|1|2`) und probiert dabei mehrere bekannte `/dev/disk/azure/...`-Pfade
+  mit Retry (60s) durch; taucht keiner auf, landet `lsblk` in
+  `/var/log/dpv-boot-warnings.log`. Sollte das passieren: `lsblk` und
+  `findmnt /data/postgres /data/apps /data/nextcloud` auf der VM prüfen und ggf. einen
+  weiteren Pfad in `scripts/cloud-init.yaml.tftpl` ergänzen.
 - **Premium SSD v2 Regionsverfügbarkeit**: `germanywestcentral` sollte PremiumV2_LRS
   unterstützen, aber das ändert sich bei Azure gelegentlich — bei Fehlern in
   `terraform plan`/`apply` ggf. auf `Premium_LRS` in `terraform/vm.tf`
-  (`azurerm_managed_disk.postgres_data`) zurückfallen.
+  (`azurerm_managed_disk.postgres_data`, `.apps_data`) zurückfallen.
+- **Füllstands-Alert liefert nur mit passendem Zähler**: der Alert in
+  `terraform/monitoring.tf` hängt am Azure Monitor Agent. Ein falscher
+  `counter_specifiers`-Wert lässt `apply` durchlaufen, es kommen nur nie Daten an — und
+  ein Alert, der nie auslöst, sieht aus wie einer, der nichts zu melden hat. Rund 15
+  Minuten nach dem ersten Boot im Workspace `log-dpv-core` gegenprüfen:
+  `Perf | where ObjectName == "Logical Disk" | summarize by InstanceName, CounterName`.
 - **pgBackRest Managed-Identity-Auth aus dem Container**: `repo1-azure-key-type=auto`
   setzt voraus, dass der Postgres-Container die Azure Instance Metadata Service (IMDS,
   `169.254.169.254`) über Docker's Bridge-Netzwerk erreichen kann. Das funktioniert auf
@@ -182,7 +292,10 @@ committen.
 - **Kompression**: `compress-type=zst`.
 - **Einmalig nach jedem VM-Neuaufbau nötig**: `stanza-create` (siehe Setup-Reihenfolge,
   Schritt 3) — das Backup-Repository muss einmal initialisiert werden, bevor Archiving/
-  Backups funktionieren.
+  Backups funktionieren. Wurde dabei auch das *Cluster* neu initialisiert (frisches
+  Datenverzeichnis, z. B. beim Postgres-18-Wechsel), passt die neue Datenbank-System-ID
+  nicht mehr zur bestehenden Stanza und `stanza-create` scheitert — dann vorher
+  `stop` + `stanza-delete --force`, siehe den Abschnitt zur Postgres-18-Umstellung.
 
 Alle manuellen `pgbackrest`-Aufrufe (Check, Restore, Backup) müssen im Container als
 `--user postgres` laufen (`docker exec`/`compose exec` ist sonst `root`, und pgBackRest
@@ -227,6 +340,112 @@ Verbindung neu aufzubauen).
 **Empfehlung**: einen Restore ab und zu unabhängig davon testen, ob gerade ein Vorfall
 vorliegt — ein Backup, das nie erfolgreich zurückgespielt wurde, ist nicht wirklich
 verifiziert.
+
+## Backup-Ebene 2: Azure Backup (Dateien)
+
+pgBackRest deckt Postgres ab — und sonst nichts. Die Nutzerdateien von Nextcloud, das
+Confluence-Home und die OS-Platte brauchen eine eigene Sicherung, dafür steht
+`terraform/backup.tf`: ein Recovery Services Vault mit täglichem VM-Backup um 01:00 UTC
+(vor dem 02:00-pgBackRest-Lauf und dem Sonntags-Update um 03:30), Aufbewahrung 14 Tage
+täglich / 6 Wochen / 6 Monate.
+
+Die Policy ist zwingend eine **Enhanced Policy** (`policy_type = "V2"`). Die
+Standard-Policy kann VMs mit Premium-SSD-v2- oder Ultra-Datenplatten überhaupt nicht
+sichern und scheitert beim Anlegen des Protected Items mit
+`UserErrorUltraAndPremiumSSDv2DiskNotSupportedWithStandardPolicy` — zwei der drei
+Datenplatten hier sind Premium v2, Standard ist also keine Option. Das lässt sich
+nachträglich auch nicht umstellen: Azure erlaubt keinen Typwechsel an einer bestehenden
+Policy, und ein Protected Item kann nicht zwischen Standard und Enhanced wandern; beides
+müsste neu angelegt werden.
+
+Enhanced erlaubt bis zu 30 Tage Instant-Restore-Snapshots (Standard nur 5); hier sind es
+**7 Tage**. Diese Snapshots liegen neben den Platten und machen eine Rücksicherung am
+selben Tag schnell, werden aber als Snapshot-Speicher berechnet — bei ~150 GB
+Nextcloud-Daten ist das der Punkt, an dem eine längere Aufbewahrung merklich Geld kostet.
+
+Zwei Eigenschaften, die im Ernstfall zählen:
+
+- **Alle Platten in einem Wiederherstellungspunkt**, zum selben Zeitpunkt aufgenommen —
+  eine vollständige Rücksicherung ist damit in sich konsistent, ohne dass wir etwas
+  koordinieren müssten.
+- **Einzelne Dateien** lassen sich aus einem Wiederherstellungspunkt zurückholen (Azure
+  hängt ihn per iSCSI ein), man muss also nicht die ganze VM zurückrollen, um eine
+  gelöschte Datei zu retten.
+
+Die Postgres-Platte ist bewusst mitgesichert, obwohl pgBackRest sie schon abdeckt: das
+kostet wenig und legt eine zweite, unabhängige Kopie in einen anderen Azure-Dienst —
+für den Fall, dass der pgBackRest-Blob-Container mal gelöscht wird oder seine
+Konfiguration verrottet. **Primär bleibt pgBackRest**, weil ein Platten-Snapshot nur
+crash-consistent ist: Postgres fährt daraus per WAL-Recovery hoch, aber Point-in-Time-
+Recovery gibt es damit nicht.
+
+### Welche Ebene wann
+
+| Situation | Weg |
+|---|---|
+| VM verloren, Platte defekt | Azure Backup, alles konsistent vom Snapshot-Zeitpunkt |
+| Einzelne Datei gelöscht | Azure Backup, File-Level-Recovery |
+| DB zerlegt (fehlerhafte Migration, `DROP TABLE`) | pgBackRest PITR auf die Sekunde vor dem Fehler |
+
+### Beide Ebenen auf denselben Stand bringen
+
+Wenn Dateien *und* Datenbank zurück müssen, dürfen sie nicht auseinanderlaufen — sonst
+verweisen Nextcloud-Metadaten auf nicht mehr vorhandene Dateien (oder umgekehrt), und
+Shares und Versionen brechen. Der Ablauf:
+
+1. Platten aus dem Azure-Backup-Wiederherstellungspunkt von Zeitpunkt **T** zurückholen.
+2. Postgres per pgBackRest-PITR auf **genau T** setzen:
+   `--type=time --target="<T>"`.
+
+Das geht immer auf, weil pgBackRest jeden beliebigen Zeitpunkt treffen kann — eine Seite
+ist zeitlich fix, die andere frei wählbar. Gleichzeitige Backups sind dafür also nicht
+nötig.
+
+Wird **nur** Postgres per PITR zurückgedreht, laufen DB und Dateien bewusst auseinander.
+Bei Nextcloud fängt `occ files:scan --all` das meiste wieder ein; Confluence' Lucene-Index
+lässt sich ohnehin jederzeit neu bauen.
+
+## Zugriff auf Secrets und Datenbanken
+
+Alle Passwörter liegen in Key Vault, nirgends sonst — auch die für Anwendungen, die noch
+gar nicht ausgerollt sind (siehe [MIGRATION.md](MIGRATION.md)).
+
+```bash
+# Welche Secrets gibt es?
+az keyvault secret list --vault-name dpv-core-kv01 --query "[].name" -o tsv
+
+# Einzelnes Passwort auslesen
+az keyvault secret show --vault-name dpv-core-kv01 --name postgres-superuser-password --query value -o tsv
+```
+
+Der Zugriff hängt an einer Rollenzuweisung. `Key Vault Secrets Officer` hat das Konto,
+das `terraform apply` ausführt — das reicht für Terraform, heißt aber auch: niemand sonst
+kommt an die Passwörter, und mit diesem einen Konto verschwindet der Zugang. Deshalb gibt
+es zusätzlich die optionale Variable `ADMIN_GROUP_OBJECT_ID`: eine Entra-ID-Gruppe, die
+`Key Vault Secrets User` bekommt. Personen aufzunehmen ist dann eine Gruppenmitgliedschaft
+und keine Terraform-Änderung.
+
+```bash
+az ad group create --display-name "DPV Infra Admins" --mail-nickname dpv-infra-admins
+# zurückgegebene id als ADMIN_GROUP_OBJECT_ID in terraform.tfvars eintragen
+```
+
+### Datenbank mit einem GUI-Client
+
+Postgres ist an `127.0.0.1:5432` gebunden — nur auf der VM selbst erreichbar, nicht auf
+der öffentlichen Schnittstelle (die NSG blockt 5432 zusätzlich). Für pgAdmin, DBeaver
+oder TablePlus also ein SSH-Tunnel:
+
+```bash
+ssh -L 5432:localhost:5432 dpvadmin@<vm_public_ip>
+```
+
+Danach verbindet sich der Client lokal gegen `localhost:5432`, Benutzer `postgres`, mit
+dem Passwort aus `postgres-superuser-password`. Ohne Tunnel geht es direkt auf der VM:
+
+```bash
+cd /opt/dpv/compose && sudo docker compose exec --user postgres postgres psql
+```
 
 ## Automatisierte Container-Updates (Renovate)
 
@@ -292,7 +511,7 @@ Dateien einmalig zu kopieren).
 
 ```
 bootstrap/    einmaliger Storage Account fürs Terraform-Remote-State (eigenes State)
-terraform/    eigentliche Infrastruktur (VM, Netzwerk, Key Vault, Postgres-Backup-Storage, ACR-Zugriff)
+terraform/    eigentliche Infrastruktur (VM, Platten, Netzwerk, Key Vault, Backup, Monitoring)
 compose/      Docker-Compose-Definitionen + Caddyfile, laufen auf der VM
 scripts/      cloud-init-Template, Secret-Fetch-Skript, pgBackRest-Config-Template, Backup-Cron, Update-Skript + systemd-Units
 ```
