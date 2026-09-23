@@ -4,7 +4,7 @@
 # again by a systemd unit on every subsequent boot/reboot, so nothing is
 # ever hand-entered or persisted outside Key Vault.
 #
-# DOMAIN_AUTH/LETSENCRYPT_EMAIL live in Key Vault too (not passed as args)
+# DOMAIN_AUTH/DOMAIN_WIKI/LETSENCRYPT_EMAIL live in Key Vault too (not passed as args)
 # specifically so changing them is just `terraform apply` (updates the
 # secret) + `systemctl restart dpv-compose.service` on the VM — no VM
 # replacement, since nothing here is baked into custom_data.
@@ -20,6 +20,7 @@ get_secret() {
 }
 
 DOMAIN_AUTH="$(get_secret domain-auth)"
+DOMAIN_WIKI="$(get_secret domain-wiki)"
 LETSENCRYPT_EMAIL="$(get_secret letsencrypt-email)"
 POSTGRES_SUPERUSER_PASSWORD="$(get_secret postgres-superuser-password)"
 POSTGRES_KEYCLOAK_PASSWORD="$(get_secret postgres-keycloak-password)"
@@ -35,6 +36,7 @@ umask 077
 cat > "${COMPOSE_DIR}/.env" <<EOF
 COMPOSE_FILE=docker-compose.yml:docker-compose.postgres.yml:docker-compose.keycloak.yml:docker-compose.confluence.yml
 DOMAIN_AUTH=${DOMAIN_AUTH}
+DOMAIN_WIKI=${DOMAIN_WIKI}
 LETSENCRYPT_EMAIL=${LETSENCRYPT_EMAIL}
 POSTGRES_SUPERUSER_PASSWORD=${POSTGRES_SUPERUSER_PASSWORD}
 POSTGRES_KEYCLOAK_PASSWORD=${POSTGRES_KEYCLOAK_PASSWORD}

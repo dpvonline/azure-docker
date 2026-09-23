@@ -118,6 +118,7 @@ resource "azurerm_linux_virtual_machine" "app" {
     azurerm_key_vault_secret.keycloak_admin,
     azurerm_key_vault_secret.ubuntu_pro_token,
     azurerm_key_vault_secret.domain_auth,
+    azurerm_key_vault_secret.domain_wiki,
     azurerm_key_vault_secret.letsencrypt_email,
     azurerm_key_vault_secret.deploy_key_private,
   ]

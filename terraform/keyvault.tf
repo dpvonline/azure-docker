@@ -123,6 +123,13 @@ resource "azurerm_key_vault_secret" "domain_auth" {
   depends_on   = [azurerm_role_assignment.deployer_kv_officer]
 }
 
+resource "azurerm_key_vault_secret" "domain_wiki" {
+  name         = "domain-wiki"
+  value        = var.DOMAIN_WIKI
+  key_vault_id = azurerm_key_vault.core.id
+  depends_on   = [azurerm_role_assignment.deployer_kv_officer]
+}
+
 resource "azurerm_key_vault_secret" "letsencrypt_email" {
   name         = "letsencrypt-email"
   value        = var.LETSENCRYPT_EMAIL

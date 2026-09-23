@@ -20,6 +20,7 @@ services:
       - "443:443"
     environment:
       DOMAIN_AUTH: ${DOMAIN_AUTH}
+      DOMAIN_WIKI: ${DOMAIN_WIKI}
       LETSENCRYPT_EMAIL: ${LETSENCRYPT_EMAIL}
     volumes:
       - ./Caddyfile:/etc/caddy/Caddyfile:ro

@@ -18,7 +18,10 @@ services:
     # directory and only its three hibernate.connection.* values get patched
     # (see MIGRATION.md, Phase 1).
     environment:
-      ATL_PROXY_NAME: wiki.dpvonline.de
+      # Test hostname until Cutover A, then wiki.dpvonline.de — see DOMAIN_WIKI
+      # in terraform/variables.tf. Must match the host users type in, or
+      # Tomcat generates redirects to the wrong name.
+      ATL_PROXY_NAME: ${DOMAIN_WIKI}
       ATL_TOMCAT_SCHEME: https
       ATL_TOMCAT_SECURE: "true"
       ATL_FORCE_CFG_UPDATE: "false"

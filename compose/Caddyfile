@@ -6,11 +6,10 @@
 	reverse_proxy keycloak:8080
 }
 
-# `tls internal` until Cutover A — REMOVE IT THEN. Public DNS for
-# wiki.dpvonline.de still points at AKS, so Let's Encrypt cannot validate this
-# host yet. Until then the test copy is reached through an /etc/hosts entry
-# pointing at this VM, and the browser warns about Caddy's own certificate.
-wiki.dpvonline.de {
-	tls internal
+# DOMAIN_WIKI is a public test hostname (wiki.scout-tools.de) until Cutover A,
+# so Let's Encrypt can validate it like DOMAIN_AUTH — no internal certificate
+# or /etc/hosts entry needed. Switching to wiki.dpvonline.de later is the same
+# as for DOMAIN_AUTH: change the Key Vault secret, restart dpv-compose.service.
+{$DOMAIN_WIKI} {
 	reverse_proxy confluence:8090
 }
