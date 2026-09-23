@@ -1,4 +1,20 @@
 -- Rendered into ./init-db.sql by scripts/fetch-secrets.sh, only ever read by
 -- Postgres on first initialization of an empty data directory.
+--
+-- ALL databases are created here, including ones whose application is not
+-- deployed yet (see MIGRATION.md): this file runs exactly once, when the
+-- cluster is first initialized. Anything missing at that moment has to be
+-- created by hand with psql later, so the cheapest time to add confluence and
+-- nextcloud is now, during the Postgres 18 re-init.
 CREATE USER keycloak WITH PASSWORD '__POSTGRES_KEYCLOAK_PASSWORD__';
 CREATE DATABASE keycloak OWNER keycloak;
+
+-- Confluence insists on a UTF-8 database with C collation and refuses to start
+-- otherwise; TEMPLATE template0 is required because template1 may already
+-- carry a different collation.
+CREATE USER confluence WITH PASSWORD '__POSTGRES_CONFLUENCE_PASSWORD__';
+CREATE DATABASE confluence OWNER confluence
+  ENCODING 'UTF8' LC_COLLATE 'C' LC_CTYPE 'C' TEMPLATE template0;
+
+CREATE USER nextcloud WITH PASSWORD '__POSTGRES_NEXTCLOUD_PASSWORD__';
+CREATE DATABASE nextcloud OWNER nextcloud ENCODING 'UTF8' TEMPLATE template0;

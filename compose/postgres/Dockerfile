@@ -3,10 +3,15 @@ FROM postgres:18
 # pgBackRest lives inside the same container as Postgres so archive_command
 # can invoke it directly, without cross-container exec gymnastics.
 #
-# ca-certificates is needed explicitly: postgres:17 is a Debian *slim* image
+# ca-certificates is needed explicitly: the postgres image is Debian *slim*
 # and doesn't include it, so pgbackrest can't verify Azure Blob's TLS
 # certificate without it ("unable to get local issuer certificate", found in
 # a real deploy).
+#
+# Major version bumps here are NOT a drop-in swap: the on-disk data directory
+# format changes, so an existing cluster must be dumped and restored (or
+# pg_upgrade'd) rather than just restarted. Renovate is configured to never
+# auto-merge majors for exactly this reason (see renovate.json).
 RUN apt-get update \
     && apt-get install -y --no-install-recommends pgbackrest ca-certificates \
     && rm -rf /var/lib/apt/lists/*

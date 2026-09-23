@@ -25,6 +25,18 @@ resource "azurerm_role_assignment" "deployer_kv_officer" {
   principal_id         = data.azurerm_client_config.current.object_id
 }
 
+# Human read access, granted to an Entra ID *group* rather than to a person.
+# The assignment above only covers whoever happens to run terraform: nobody
+# else can look up a database password, and the access disappears along with
+# that one account. Optional — leave ADMIN_GROUP_OBJECT_ID unset and only the
+# deployer keeps access.
+resource "azurerm_role_assignment" "admins_kv_secrets_user" {
+  count                = var.ADMIN_GROUP_OBJECT_ID == null ? 0 : 1
+  scope                = azurerm_key_vault.core.id
+  role_definition_name = "Key Vault Secrets User"
+  principal_id         = var.ADMIN_GROUP_OBJECT_ID
+}
+
 resource "random_password" "postgres_superuser" {
   length  = 32
   special = false
@@ -37,6 +49,19 @@ resource "random_password" "postgres_keycloak" {
 
 resource "random_password" "keycloak_admin" {
   length  = 24
+  special = false
+}
+
+# Created ahead of the applications themselves — init-db.sql needs them during
+# the cluster's first initialization, which happens long before Confluence and
+# Nextcloud are deployed (see MIGRATION.md).
+resource "random_password" "postgres_confluence" {
+  length  = 32
+  special = false
+}
+
+resource "random_password" "postgres_nextcloud" {
+  length  = 32
   special = false
 }
 
@@ -63,6 +88,20 @@ resource "azurerm_key_vault_secret" "postgres_keycloak" {
 resource "azurerm_key_vault_secret" "keycloak_admin" {
   name         = "keycloak-admin-password"
   value        = random_password.keycloak_admin.result
+  key_vault_id = azurerm_key_vault.core.id
+  depends_on   = [azurerm_role_assignment.deployer_kv_officer]
+}
+
+resource "azurerm_key_vault_secret" "postgres_confluence" {
+  name         = "postgres-confluence-password"
+  value        = random_password.postgres_confluence.result
+  key_vault_id = azurerm_key_vault.core.id
+  depends_on   = [azurerm_role_assignment.deployer_kv_officer]
+}
+
+resource "azurerm_key_vault_secret" "postgres_nextcloud" {
+  name         = "postgres-nextcloud-password"
+  value        = random_password.postgres_nextcloud.result
   key_vault_id = azurerm_key_vault.core.id
   depends_on   = [azurerm_role_assignment.deployer_kv_officer]
 }

@@ -24,6 +24,11 @@ LETSENCRYPT_EMAIL="$(get_secret letsencrypt-email)"
 POSTGRES_SUPERUSER_PASSWORD="$(get_secret postgres-superuser-password)"
 POSTGRES_KEYCLOAK_PASSWORD="$(get_secret postgres-keycloak-password)"
 KEYCLOAK_ADMIN_PASSWORD="$(get_secret keycloak-admin-password)"
+# Fetched even though Confluence and Nextcloud aren't deployed yet: init-db.sql
+# below creates their databases during the cluster's one and only
+# initialization, so the passwords must exist by then (see MIGRATION.md).
+POSTGRES_CONFLUENCE_PASSWORD="$(get_secret postgres-confluence-password)"
+POSTGRES_NEXTCLOUD_PASSWORD="$(get_secret postgres-nextcloud-password)"
 
 umask 077
 
@@ -43,7 +48,13 @@ chmod 600 "${COMPOSE_DIR}/.env"
 # "postgres" user — 600/root:root (like .env) would make it unreadable to
 # that user and silently skip the CREATE USER statement, which is exactly
 # what caused Keycloak's "role does not exist" errors on a real deploy.
-sed "s/__POSTGRES_KEYCLOAK_PASSWORD__/${POSTGRES_KEYCLOAK_PASSWORD}/" \
+#
+# The passwords are generated with `special = false` (see keyvault.tf), so they
+# are alphanumeric and can't contain the sed delimiter or otherwise break the
+# substitution.
+sed -e "s/__POSTGRES_KEYCLOAK_PASSWORD__/${POSTGRES_KEYCLOAK_PASSWORD}/" \
+    -e "s/__POSTGRES_CONFLUENCE_PASSWORD__/${POSTGRES_CONFLUENCE_PASSWORD}/" \
+    -e "s/__POSTGRES_NEXTCLOUD_PASSWORD__/${POSTGRES_NEXTCLOUD_PASSWORD}/" \
   "${COMPOSE_DIR}/init-db.sql.template" > "${COMPOSE_DIR}/init-db.sql"
 chown root:root "${COMPOSE_DIR}/init-db.sql"
 chmod 644 "${COMPOSE_DIR}/init-db.sql"

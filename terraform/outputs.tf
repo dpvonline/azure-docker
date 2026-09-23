@@ -14,6 +14,6 @@ output "backup_storage_account_name" {
   value = azurerm_storage_account.backups.name
 }
 
-output "acr_login_server" {
-  value = data.azurerm_container_registry.biber.login_server
+output "recovery_vault_name" {
+  value = azurerm_recovery_services_vault.core.name
 }
