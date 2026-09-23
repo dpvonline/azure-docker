@@ -9,12 +9,13 @@
 CREATE USER keycloak WITH PASSWORD '__POSTGRES_KEYCLOAK_PASSWORD__';
 CREATE DATABASE keycloak OWNER keycloak;
 
--- Confluence insists on a UTF-8 database with C collation and refuses to start
--- otherwise; TEMPLATE template0 is required because template1 may already
--- carry a different collation.
+-- Same encoding and collation as the production database on AKS (UTF8,
+-- en_US.utf8), which is what Confluence has been running on. Collation decides
+-- how text sorts, so changing it during a migration would quietly change the
+-- order of lists and search results for users.
 CREATE USER confluence WITH PASSWORD '__POSTGRES_CONFLUENCE_PASSWORD__';
 CREATE DATABASE confluence OWNER confluence
-  ENCODING 'UTF8' LC_COLLATE 'C' LC_CTYPE 'C' TEMPLATE template0;
+  ENCODING 'UTF8' LC_COLLATE 'en_US.utf8' LC_CTYPE 'en_US.utf8' TEMPLATE template0;
 
 CREATE USER nextcloud WITH PASSWORD '__POSTGRES_NEXTCLOUD_PASSWORD__';
 CREATE DATABASE nextcloud OWNER nextcloud ENCODING 'UTF8' TEMPLATE template0;

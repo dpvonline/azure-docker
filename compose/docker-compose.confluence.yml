@@ -1,0 +1,36 @@
+services:
+  confluence:
+    # Pinned to exactly what runs on AKS today — `atlassian/confluence:latest`
+    # there resolved to 10.2.18. A migration is not the moment for a version
+    # jump; Renovate takes over from here (see renovate.json for why minor
+    # releases are not auto-merged for Confluence).
+    image: atlassian/confluence:10.2.18
+    restart: unless-stopped
+    depends_on:
+      - postgres
+    networks:
+      - dpv
+    # Mirrors the environment of the AKS deployment one to one. The database
+    # connection is deliberately NOT set here: with ATL_FORCE_CFG_UPDATE=false
+    # Confluence ignores the ATL_JDBC_* variables and reads confluence.cfg.xml
+    # in the home directory instead. That file also carries the server ID, the
+    # license and the JWT keys, which is why it moves over with the home
+    # directory and only its three hibernate.connection.* values get patched
+    # (see MIGRATION.md, Phase 1).
+    environment:
+      ATL_PROXY_NAME: wiki.dpvonline.de
+      ATL_TOMCAT_SCHEME: https
+      ATL_TOMCAT_SECURE: "true"
+      ATL_FORCE_CFG_UPDATE: "false"
+      JVM_MINIMUM_MEMORY: 1024m
+      JVM_MAXIMUM_MEMORY: 3072m
+      # TEST COPY ONLY — REMOVE AT CUTOVER A. This instance runs on a copy of
+      # the production data, including the SMTP account and every user's
+      # notification settings. Without this it would send watch notifications
+      # and daily summaries to real users, in parallel to production.
+      JVM_SUPPORT_RECOMMENDED_ARGS: "-Datlassian.mail.senddisabled=true -Datlassian.mail.fetchdisabled=true"
+    volumes:
+      - /data/apps/confluence:/var/atlassian/application-data/confluence
+    # Port 8090 is intentionally not published — Caddy reaches it over the
+    # internal "dpv" network only. Synchrony (collaborative editing) runs as a
+    # child process and is proxied through 8090 under /synchrony.

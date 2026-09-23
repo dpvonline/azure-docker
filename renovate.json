@@ -16,6 +16,12 @@
       "description": "Major bumps (e.g. postgres 17->18) can mean incompatible on-disk data or breaking changes — always reviewed manually, never auto-merged.",
       "matchUpdateTypes": ["major"],
       "automerge": false
+    },
+    {
+      "description": "Confluence minor releases run database upgrade tasks and regularly break installed apps; only patch releases roll out unattended, minors get a PR for manual review.",
+      "matchPackageNames": ["atlassian/confluence"],
+      "matchUpdateTypes": ["minor"],
+      "automerge": false
     }
   ]
 }
