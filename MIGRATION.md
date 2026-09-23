@@ -212,46 +212,157 @@ Container stoppen. Das alte System läuft unverändert weiter.
 
 ## Phase 2 — Cutover A: Keycloak + Confluence live
 
-**Ziel:** `auth.` und `wiki.dpvonline.de` zeigen auf die neue VM. **Wartungsfenster,
-Nutzer betroffen.**
+**Ziel:** `auth.` und `wiki.dpvonline.de` laufen auf der VM, AKS ist abgeschaltet.
+**Wartungsfenster, Nutzer betroffen.** Zwei Stunden ankündigen; der Ablauf selbst
+dauert nach den Messungen aus Phase 1 etwa 45–60 Minuten.
 
-### Vorbereitung (Tage vorher)
+### Wer merkt was
 
-- TTL der betroffenen Records bei eurem externen DNS-Anbieter herunterdrehen
-- Wartungsfenster ankündigen — währenddessen scheitern auch **neue Nextcloud-Logins**,
-  weil Keycloak kurz weg ist (bestehende Sessions laufen weiter)
-- Ablauf einmal trocken durchgehen, inklusive Rollback
+| Zeitraum | Confluence | Anmeldung (Keycloak) | Nextcloud auf Lightsail |
+|---|---|---|---|
+| ab Schritt 1 | nur lesen | – | – |
+| ab Schritt 2 bis Schritt 9 | nicht erreichbar für neue Logins | **weg** | bestehende Sessions laufen, **neue Logins scheitern** |
+| ab Schritt 11 | normal | normal | normal |
+
+### Vorbereitung
+
+**Mindestens 7 Stunden vorher, besser am Vortag — IONOS:**
+- TTL von `auth.dpvonline.de` (A **und** AAAA) von 21.600 auf **300** Sekunden
+  setzen. Sonst zeigen manche Clients nach der Umstellung bis zu sechs Stunden auf
+  AKS, und ein Rollback dauert genauso lange. Die neue TTL greift erst, wenn die alte
+  abgelaufen ist. `wiki.dpvonline.de` steht bereits auf 60.
+- Die aktuellen Werte für den Rollback notieren:
+  A `72.144.24.168`, AAAA `2603:1020:c01:2::259` (für beide Namen gleich).
+
+**Am Tag davor:**
+- Cutover-PR vorbereiten, **aber nicht mergen**: entfernt die Zeile
+  `JVM_SUPPORT_RECOMMENDED_ARGS` (Mail-Sperre) aus `docker-compose.confluence.yml`.
+  Gemergt vorher, würde die Testkopie beim nächsten Neustart Mails an echte Nutzer
+  verschicken.
+- Wartungsfenster ankündigen, inklusive der Nextcloud-Logins.
+- Zugangsdaten eines Confluence-Admins bereithalten (Nur-Lese-Modus ein/aus).
+
+### Vorab-Checks im Fenster (5 Min.)
+
+- Eigene IP ist in `ADMIN_IP_CIDRS`, SSH auf die VM geht. Sonst erst `tfvars` +
+  `terraform apply` (nur NSG).
+- `kubectl` erreicht AKS (Zugangsdaten in eine eigene kubeconfig,
+  `az aks get-credentials -g Infra -n Kubernetes-Cluster --file <datei>`).
+- `dig +noall +answer auth.dpvonline.de @8.8.8.8` zeigt TTL ≤ 300.
+- Auf der VM: `pgbackrest … check` mit Exit 0.
+- **Im alten Repo `azure-infrastructure` während und nach dem Cutover kein
+  `terraform apply`.** Die Deployments sind dort mit `replicas: 1` hinterlegt; ein
+  `apply` würde Keycloak und Confluence auf AKS wieder hochfahren, und es gäbe zwei
+  schreibende Instanzen.
 
 ### Schritte
 
-1. AKS-Deployments für Keycloak und Confluence auf 0 skalieren (Schreibstopp).
-2. Finale Dumps beider Datenbanken.
-3. Restore in die neue Postgres-Instanz.
-4. Confluence-Home-Delta nachziehen.
-5. `domain-auth`-Secret auf `auth.dpvonline.de` ändern, Caddy-Routen auf echtes
-   Let's Encrypt umstellen (`tls internal` entfernen). Laut
-   [fetch-secrets.sh](scripts/fetch-secrets.sh) genügt dafür `terraform apply` plus
-   `systemctl restart dpv-compose.service` — kein VM-Neubau.
-6. A/AAAA-Records für `auth.` und `wiki.` auf die neue VM-IP.
+| # | Schritt | Dauer | Rollback |
+|---|---|---|---|
+| 1 | Confluence auf AKS: *Administration → Allgemeine Konfiguration → Wartung → Nur-Lese-Modus* einschalten | 2 Min. | Modus ausschalten |
+| 2 | Keycloak auf AKS stoppen: `kubectl -n keycloak scale deploy/keycloak --replicas=0` | 1 Min. | `--replicas=1` |
+| 3 | Keycloak-Dump ziehen und auf der VM einspielen | 3 Min. | ab hier alles über Rollback A |
+| 4 | Confluence-DB-Dump ziehen und einspielen | 3 Min. | |
+| 5 | Confluence-Home kopieren und prüfen, dann Confluence auf AKS stoppen | 5–10 Min. | |
+| 6 | `confluence.cfg.xml` anpassen | 2 Min. | |
+| 7 | Cutover-PR mergen, Secrets umstellen, `terraform apply` | 3 Min. | |
+| 8 | DNS bei IONOS umstellen | 5–10 Min. | **Rollback B** |
+| 9 | Stack auf der VM neu starten | 5 Min. | |
+| 10 | Prüfen | 15 Min. | |
+| 11 | Nur-Lese-Modus auf der VM ausschalten — **ab hier kein verlustfreies Zurück** | 1 Min. | nur mit Datenverlust |
 
-> **Client-Secrets in diesem Fenster nicht rotieren.** Das noch auf Lightsail laufende
-> Nextcloud authentifiziert gegen diese Keycloak-Instanz. Rotation erst in Phase 5.
+**3 — Keycloak.** Auf der VM Keycloak stoppen, die Datenbank neu anlegen, einspielen:
 
-### Verifikation
+```
+kubectl -n database exec <postgres-pod> -- pg_dump -U postgres -Fc keycloak > keycloak.dump
+# auf der VM:
+docker compose stop keycloak
+psql -c "DROP DATABASE keycloak WITH (FORCE)" -c "CREATE DATABASE keycloak OWNER keycloak"
+pg_restore --no-owner --no-privileges --role=keycloak -d keycloak < keycloak.dump
+```
 
-SSO-Login von einem Gerät ohne bestehende Session, Confluence-Zugriff über SSO,
-Zertifikate ausgestellt, Nextcloud auf Lightsail kann sich weiterhin anmelden.
+Kontrolle: Tabellenzahl, Realms `DPV` und `master`, und dass
+`migration_model` die Version aus `docker-compose.keycloak.yml` zeigt (ein Downgrade
+verweigert Keycloak). Die Test-Anpassungen aus Phase 1 (SAML-Client auf
+`wiki.scout-tools.de`) werden dabei überschrieben — gewollt.
+
+**4 — Confluence-Datenbank.** Auf der VM Confluence stoppen, die Datenbank mit
+`en_US.utf8` neu anlegen, ohne das Scheduler-Protokoll einspielen (Details siehe
+Phase 1, Schritt 2). Kontrolle: `select count(*) from content` und `from bodycontent`
+müssen mit AKS übereinstimmen.
+
+**5 — Home-Verzeichnis.** `/data/apps/confluence` auf der VM **leeren** — dort liegen
+jetzt Test-Stände — und frisch aus dem Pod kopieren, mit denselben Ausschlüssen wie in
+Phase 1. Danach Dateizahl und Größe pro Eintrag mit dem Pod vergleichen und Fehlendes
+nachholen: `kubectl exec` hat in Phase 1 nach 72 Sekunden mitten im Archiv abgebrochen.
+Erst wenn alle Einträge übereinstimmen:
+`kubectl -n wiki scale deploy/confluence --replicas=0`.
+
+**6 — `confluence.cfg.xml`.** Wie in Phase 1, Schritt 4: `hibernate.connection.url`
+auf `jdbc:postgresql://postgres:5432/confluence`, `hibernate.connection.password`
+aus dem Key Vault. Zusätzlich prüfen: `access.mode` steht auf `READ_ONLY`, weil die
+Datei den Nur-Lese-Modus aus Schritt 1 mitgebracht hat. Base URL, Identity Provider
+und Synchrony-Adresse **nicht** anfassen — die frischen Dumps enthalten bereits die
+`dpvonline.de`-Werte.
+
+**7 — Konfiguration.** Den vorbereiteten Cutover-PR mergen, lokal
+`git checkout main && git pull`. In `terraform.tfvars`
+`DOMAIN_AUTH = "auth.dpvonline.de"` und `DOMAIN_WIKI = "wiki.dpvonline.de"`, dann
+`terraform apply` — der Plan darf nur die beiden Secrets in-place ändern.
+
+**8 — DNS bei IONOS.** Für `auth` und `wiki`: A-Eintrag auf `4.182.232.115`,
+**AAAA-Eintrag löschen** (die VM hat keine IPv6-Adresse; ein stehengebliebener
+AAAA-Eintrag schickt Browser, die IPv6 bevorzugen, weiter zu AKS). Warten, bis
+`dig +short auth.dpvonline.de @8.8.8.8` und `… AAAA …` den neuen Stand zeigen.
+
+**9 — Neustart.** Auf der VM `git pull` und `systemctl restart dpv-compose.service`.
+Das schreibt die neuen Namen in die `.env`, Keycloak läuft danach als
+`auth.dpvonline.de`, und Caddy holt sich die Zertifikate. Caddy braucht dafür, dass DNS
+bereits auf die VM zeigt, deshalb Schritt 8 vorher. Confluence braucht mit frischem
+Home-Verzeichnis ein paar Minuten, bis `/status` `RUNNING` meldet.
+
+**10 — Prüfen.**
+- `https://auth.dpvonline.de/realms/DPV/protocol/saml/descriptor`: `entityID` ist
+  `https://auth.dpvonline.de/realms/DPV`, Zertifikat von Let's Encrypt.
+- `https://wiki.dpvonline.de/status` meldet `RUNNING`, und
+  `/rest/applinks/1.0/manifest` zeigt `<url>https://wiki.dpvonline.de</url>`.
+- Login ins Wiki von einem Gerät ohne bestehende Session, Seiten, Anhänge, Suche.
+- Anmeldung bei Nextcloud (Lightsail) mit einem Account, der gerade nicht eingeloggt ist.
+- Confluence-Log auf `ERROR` prüfen.
+
+**11 — Freigeben.** Auf der VM den Nur-Lese-Modus in Confluence ausschalten, eine
+Testseite bearbeiten, über *Administration → Mailserver* eine Testmail schicken.
+Wartungsende ankündigen.
 
 ### Rollback
 
-DNS-Records zurück auf die alte IP, AKS-Deployments wieder hochskalieren. Deshalb die
-niedrige TTL.
+**A — vor der DNS-Umstellung (Schritte 1–7).** Nichts ist verloren, AKS hat den
+vollständigen Stand:
+`kubectl -n keycloak scale deploy/keycloak --replicas=1`,
+`kubectl -n wiki scale deploy/confluence --replicas=1`, auf AKS den Nur-Lese-Modus
+ausschalten. Den Stand auf der VM einfach liegen lassen.
+
+**B — nach der DNS-Umstellung, vor Schritt 11.** Bei IONOS A **und** AAAA auf die
+notierten alten Werte zurück, dann wie A. Wegen des Nur-Lese-Modus hat auf der VM
+niemand geschrieben, es geht also nichts verloren. Dauert bis zur TTL, also etwa
+fünf Minuten.
+
+**Nach Schritt 11** hat die VM Änderungen, die AKS nicht hat. Ein Rollback verliert
+sie, oder sie müssten zurückmigriert werden. Deshalb Schritt 10 gründlich.
 
 ### Danach
 
-Nach einer unauffälligen Woche: **AKS abreißen.** Das ist die große Einsparung. Im alten
-Repo die migrierten Ressourcen aus dem State entfernen; die DNS-Zone `scout-tools.de`
-bleibt vorerst.
+- Direkt nach dem Fenster auf der VM ein Full-Backup: `pgbackrest-full-backup.sh`.
+- AKS eine Woche auf 0 stehen lassen, PVCs **nicht** löschen. Dann **AKS abreißen** —
+  das ist die große Einsparung. Außer `auth` und `wiki` bedient AKS nur noch Biber und
+  pgAdmin (`anmeldung.`, `db.scout-tools.de`), beide werden nicht mehr gebraucht.
+- Die Testnamen `auth.` und `wiki.scout-tools.de` bedient die VM nach Schritt 9 nicht
+  mehr; die DNS-Einträge dafür in Phase 5 aufräumen.
+- `office.dpvonline.de` zeigt auf AKS, antwortet aber schon heute nicht (Stand
+  23.09.). Das betrifft Collabora für Nextcloud und gehört zu Phase 3.
+
+> **Client-Secrets in diesem Fenster nicht rotieren.** Das noch auf Lightsail laufende
+> Nextcloud authentifiziert gegen diese Keycloak-Instanz. Rotation erst in Phase 5.
 
 ---
 
