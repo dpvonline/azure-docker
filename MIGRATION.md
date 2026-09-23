@@ -148,26 +148,50 @@ betroffen.
 
 ## Phase 1 — Confluence aufbauen
 
-**Ziel:** Confluence läuft auf der neuen VM mit einer Kopie der Produktivdaten,
-erreichbar über `/etc/hosts`. DNS unverändert, keine Nutzer betroffen.
+**Ziel:** Confluence läuft auf der neuen VM mit einer Kopie der Produktivdaten unter
+`wiki.scout-tools.de` und meldet sich gegen den Keycloak auf der VM
+(`auth.scout-tools.de`) an. DNS für `wiki.dpvonline.de` unverändert, keine Nutzer
+betroffen.
 
-Confluence zuerst, weil es die aufwendigste App ist (JVM-Tuning, Atlassian-Image,
-Lizenzschlüssel) und weil danach der Weg für Cutover A frei ist — und damit für den
-Abriss von AKS, dem teuersten Posten.
+Confluence zuerst, weil es die aufwendigste App ist und weil danach der Weg für
+Cutover A frei ist — und damit für den Abriss von AKS, dem teuersten Posten.
 
-### Schritte
+### Schritte (so umgesetzt, Vorlage für Cutover A)
 
-1. `compose/docker-compose.confluence.yml`, Home-Verzeichnis auf `/data/apps/confluence`.
-   Umgebungsvariablen aus dem alten [confluence.tf](../azure-infrastructure/kubernetes/confluence.tf)
-   übernehmen: `ATL_JDBC_*`, `ATL_PROXY_NAME`, `ATL_TOMCAT_SCHEME/SECURE`,
-   `JVM_MINIMUM_MEMORY=1024m`, `JVM_MAXIMUM_MEMORY=3072m`.
-2. `CONFLUENCE_LICENSE` als Key-Vault-Secret, `fetch-secrets.sh` und `COMPOSE_FILE`
-   erweitern.
-3. Caddy-Route für `wiki.dpvonline.de`, vorerst mit `tls internal`.
-4. `pg_dump` der `confluence`-DB aus dem AKS-Postgres → Restore in die neue Instanz.
-5. Confluence-Home (Anhänge) aus dem AKS-PVC (20 GiB) auf Platte 2 kopieren.
-6. **Exakt dieselbe Confluence-Version wie auf AKS** verwenden. Ein Versionssprung
-   gehört nicht in eine Migration.
+1. **Version:** `atlassian/confluence:10.2.18`. Auf AKS läuft `:latest`, das ist
+   derzeit bit-genau dieses Image (gleicher Digest). Kein Versionssprung beim Umzug.
+2. **Datenbank:** `pg_dump -Fc` der `confluence`-DB aus dem AKS-Postgres, auf der VM in
+   eine mit `en_US.utf8` neu angelegte Datenbank eingespielt (wie in Produktion).
+   Dabei die Daten von `scheduler_run_details` weggelassen: 5,8 der 6 GB sind reines
+   Job-Protokoll. Aus `pg_restore --list` die Zeile `TABLE DATA public
+   scheduler_run_details` entfernen und mit `-L` einspielen. Ergebnis: 152 MB, Restore
+   in 5 Sekunden, Inhaltszahlen identisch mit AKS.
+3. **Home-Verzeichnis** per `tar` aus dem Pod, **ohne** `logs`, `log`,
+   `analytics-logs`, `restore` (alte Importe), `temp`, `plugins-temp`,
+   `plugins-osgi-cache`, `webresource-temp`, `bundled-plugins`, `lost+found`, Lock- und
+   PID-Dateien — das erzeugt Confluence beim Start neu. Rund 1,3 GB. Die Übertragung
+   über `kubectl exec` kann mittendrin abreißen: danach Dateizahl und Größe pro Eintrag
+   mit dem Pod vergleichen und Fehlendes nachholen. Besitzer `2002:2002`.
+4. **`confluence.cfg.xml`** zieht mit um und bleibt die Quelle der Konfiguration
+   (`ATL_FORCE_CFG_UPDATE=false`). Confluence schreibt selbst Zustand hinein
+   (`finalizedBuildNumber`, JWT-Schlüssel, Synchrony-Token), den die Vorlage des Images
+   beim Neuerzeugen verwerfen würde. Anzupassen sind nur `hibernate.connection.url`
+   (`jdbc:postgresql://postgres:5432/confluence`) und `hibernate.connection.password`
+   (aus dem Key Vault, `postgres-confluence-password`).
+5. **Nur für die Testkopie:** Base URL (`bandana`, `atlassian.confluence.settings`) auf
+   `https://wiki.scout-tools.de`, Identity Provider (`AO_ED669C_IDP_CONFIG`: `ISSUER`,
+   `SSO_URL`) auf `auth.scout-tools.de`. In der Keycloak-Kopie den SAML-Client
+   `https://wiki.dpvonline.de` umbenannt, samt Base-URL, Redirect-URI und
+   `saml_assertion_consumer_url_post`. Keycloak dafür stoppen, es cacht Clients. Das
+   Signaturzertifikat bleibt gültig, weil die Keycloak-Kopie dieselben Realm-Schlüssel
+   trägt. **Beim Cutover A nichts zurückstellen:** die frischen Dumps bringen die
+   `dpvonline.de`-Werte mit.
+6. **Ausgehende Mails** sind in der Testkopie per `-Datlassian.mail.senddisabled=true`
+   abgeschaltet, sonst verschickt sie mit echten Daten Mails an echte Nutzer.
+
+**Laufender Betrieb:** Der wöchentliche Update-Lauf löscht Scheduler-Protokoll älter
+als 7 Tage. Confluence hält es sonst fest 90 Tage (im Code, nicht einstellbar) und die
+Tabelle wächst auf etwa 6 GB.
 
 ### Verifikation
 
