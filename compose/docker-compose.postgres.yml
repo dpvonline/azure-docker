@@ -22,19 +22,7 @@ services:
       - "-c"
       - "archive_timeout=600"
     volumes:
-      # Long syntax only for create_host_path: false. With the short syntax
-      # Docker silently creates a missing source directory — on the OS disk,
-      # since that is where / lives — and Postgres happily initializes there.
-      # That is exactly how the data ended up on the OS disk and filled it
-      # (see MIGRATION.md). Now compose refuses to start instead. This is the
-      # second line of defense after the mountpoint check in
-      # scripts/mount-data-disks.sh, and it also covers a hand-run
-      # `docker compose up` that never goes through boot.sh.
-      - type: bind
-        source: /data/postgres
-        target: /var/lib/postgresql/data
-        bind:
-          create_host_path: false
+      - /data/postgres:/var/lib/postgresql/data
       - ./init-db.sql:/docker-entrypoint-initdb.d/init-db.sql:ro
     # Bound to the loopback interface only — NOT reachable from outside the VM
     # (the NSG blocks 5432 anyway, but binding to 127.0.0.1 means it never

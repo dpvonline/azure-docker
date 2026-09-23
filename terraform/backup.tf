@@ -28,28 +28,6 @@ resource "azurerm_recovery_services_vault" "core" {
   # Soft delete is on by default and no longer configurable — deleted recovery
   # points stay restorable for 14 days, which also means a `terraform destroy`
   # of this vault needs those cleared out first.
-
-  # Both are the defaults, spelled out because they are what the alert
-  # routing below depends on.
-  monitoring {
-    alerts_for_all_job_failures_enabled            = true
-    alerts_for_critical_operation_failures_enabled = true
-  }
-}
-
-# The vault raises an alert for every failed backup job on its own — but an
-# alert with no action group attached is only visible to someone who happens
-# to open the portal. From mid-August to late September it raised one
-# "Backup Failure" alert every day, 30 in total, and none of them reached
-# anyone (see MIGRATION.md). This rule attaches the ops action group to every
-# alert fired within the vault's scope.
-resource "azurerm_monitor_alert_processing_rule_action_group" "backup_alerts" {
-  name                 = "apr-dpv-backup-alerts"
-  resource_group_name  = azurerm_resource_group.core.name
-  scopes               = [azurerm_recovery_services_vault.core.id]
-  add_action_group_ids = [azurerm_monitor_action_group.ops.id]
-  description          = "Route Azure Backup's built-in job-failure alerts to the ops mailbox"
-  tags                 = var.TAGS
 }
 
 resource "azurerm_backup_policy_vm" "daily" {

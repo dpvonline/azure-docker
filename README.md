@@ -60,15 +60,9 @@ Rollback) — siehe unten.
   (`terraform/backup.tf`) sichert täglich die VM samt *aller* Platten in einem
   gemeinsamen, untereinander konsistenten Wiederherstellungspunkt und kann einzelne
   Dateien zurückholen. Details und der Wiederherstellungsablauf weiter unten.
-- **Alerting** (`terraform/monitoring.tf`, alles an `cloudadmin@dpvonline.de`) für
-  Fehler, die sonst unbemerkt bleiben: volllaufende Platte (per Azure Monitor Agent,
-  da Azure nicht ins Gast-Dateisystem sieht), aufgebrauchte CPU-Credits der B-Serie,
-  Fehler der eigenen Skripte (Platte nicht gemountet, Update abgebrochen, Backup
-  gescheitert — per Syslog) und fehlgeschlagene Azure-Backup-Jobs (`terraform/backup.tf`).
-  Dazu ein **Totmannschalter**, der auslöst, wenn der Monitor-Agent gar keine Daten
-  mehr liefert — sonst sähe ein toter Agent genauso aus wie „alles in Ordnung".
-  Warum das so viel ist: im August sind all diese Fälle gleichzeitig eingetreten, und
-  keiner hat jemanden erreicht (siehe *Vorfall August 2026* in MIGRATION.md).
+- **Alerting** (`terraform/monitoring.tf`) für die zwei Fehlerfälle, die sonst
+  unbemerkt bleiben: volllaufende Platte (per Azure Monitor Agent, da Azure nicht ins
+  Gast-Dateisystem sieht) und aufgebrauchte CPU-Credits der B-Serie.
 - **Azure Key Vault** hält alle Secrets (Postgres-Passwörter, Keycloak-Admin-Passwort,
   Ubuntu-Pro-Token, Git-Deploy-Key). Die VM zieht sie beim Boot per Managed Identity.
 - **Caddy** übernimmt automatisches Let's-Encrypt-HTTPS (HTTP-01), kein separates
@@ -107,7 +101,7 @@ Der saubere Weg ist, die Datenplatte gleich mit ersetzen zu lassen:
 terraform apply -replace=azurerm_managed_disk.postgres_data
 ```
 
-Damit hängt am neuen Boot eine leere Platte, `scripts/mount-data-disks.sh` formatiert sie (`blkid` findet
+Damit hängt am neuen Boot eine leere Platte, cloud-init formatiert sie (`blkid` findet
 kein Dateisystem → `mkfs.ext4`), und Postgres initialisiert ein frisches Cluster — ohne
 dass irgendwo von Hand gelöscht werden muss.
 
@@ -245,15 +239,7 @@ committen.
    Änderungen an `cloud-init.yaml.tftpl` (oder an sonst was, das in `custom_data`
    einfließt) erzwingen bei jedem künftigen `apply` einen VM-Replace — Terraform
    kann `custom_data` auf einer laufenden VM nicht aktualisieren, nur neu erstellen.
-   Die Daten überleben das, weil alle drei Datenplatten eigene Ressourcen sind.
-
-   > ⚠️ **Erst mergen, dann `apply`.** Ein `apply`, das die VM neu baut, mischt zwei
-   > Stände: `custom_data` wird aus deinem **lokalen Arbeitsverzeichnis** gerendert,
-   > die VM klont beim Boot aber **`main`**. Läuft beides auseinander, bootet die VM
-   > mit cloud-init vom Branch und Compose-Dateien von `main`. Genau das ist im Juli
-   > passiert: Postgres landete auf der OS-Platte, und im August war die Platte voll
-   > (siehe [MIGRATION.md](MIGRATION.md), *Vorfall August 2026*). Also: PR mergen,
-   > lokal `git checkout main && git pull`, **dann** `terraform apply`.
+   Erwartet und unkritisch, solange noch keine echten Daten auf der Platte liegen.
 
    `DOMAIN_AUTH`/`LETSENCRYPT_EMAIL` sind davon **nicht** betroffen — die liegen
    bewusst in Key Vault statt in `custom_data`. Eine Domain-Änderung braucht also
@@ -264,16 +250,7 @@ committen.
    - `ssh <ADMIN_USERNAME>@<vm_public_ip>`
    - `cd /opt/dpv/compose && sudo docker compose ps` prüfen, ob alle Container laufen
      (`COMPOSE_FILE` in `.env` listet alle drei Compose-Dateien, `-f`-Flags sind nicht nötig)
-   - `df -h /data/postgres /data/apps /data/nextcloud` — alle drei müssen gemountet sein.
-     `scripts/mount-data-disks.sh` erledigt das bei jedem Start von `dpv-compose.service`
-     und verweigert den Start des Stacks, solange eine Platte fehlt; der Service
-     versucht es dann alle zwei Minuten erneut. Eine spät von Terraform angehängte
-     Platte wird so ohne Eingriff nachgezogen.
    - `sudo docker compose exec --user postgres postgres pgbackrest --stanza=main --config=/etc/pgbackrest/pgbackrest.conf stanza-create`
-     danach **`… check`** mit derselben Befehlszeile, der muss mit Exit 0 durchgehen.
-     Wird das vergessen, scheitert jede WAL-Archivierung — und Postgres hebt jedes
-     nicht archivierte Segment auf, bis die Platte voll ist (siehe *Vorfall August
-     2026* in MIGRATION.md)
      (einmalig, initialisiert das Backup-Repository — `--user postgres` ist hier der Container-interne
      Postgres-User, nicht mit einem Linux-User auf der VM zu verwechseln, den es nicht gibt;
      `docker exec`/`compose exec` läuft sonst als `root`, und pgBackRest verbindet sich lokal
