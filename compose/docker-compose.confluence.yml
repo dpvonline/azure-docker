@@ -27,11 +27,6 @@ services:
       ATL_FORCE_CFG_UPDATE: "false"
       JVM_MINIMUM_MEMORY: 1024m
       JVM_MAXIMUM_MEMORY: 3072m
-      # TEST COPY ONLY — REMOVE AT CUTOVER A. This instance runs on a copy of
-      # the production data, including the SMTP account and every user's
-      # notification settings. Without this it would send watch notifications
-      # and daily summaries to real users, in parallel to production.
-      JVM_SUPPORT_RECOMMENDED_ARGS: "-Datlassian.mail.senddisabled=true -Datlassian.mail.fetchdisabled=true"
     volumes:
       - /data/apps/confluence:/var/atlassian/application-data/confluence
     # Port 8090 is intentionally not published — Caddy reaches it over the
