@@ -50,6 +50,14 @@ Rollback) — siehe unten.
   Aufteilung verdoppelt also die nutzbaren IOPS zum gleichen Speicherpreis. Die
   LUN-Nummern sind der Vertrag zwischen `terraform/vm.tf` und der Mount-Logik in
   `scripts/cloud-init.yaml.tftpl`.
+- **IPv4 und IPv6.** Die VM hat je eine öffentliche Adresse (`pip-dpv-core`,
+  `pip-dpv-core-v6`, siehe `terraform output`), das VNet einen eindeutigen lokalen
+  IPv6-Bereich `fdc7:3b1e:9a20::/48`. Auch das Docker-Netz `dpv` hat IPv6, damit Caddy
+  und Keycloak bei IPv6-Besuchern die echte Adresse sehen und nicht die des
+  Docker-Gateways. Ubuntu holt die Adresse per DHCPv6; cloud-init schreibt
+  `dhcp6: true` aber nur, wenn die Adresse beim Rendern der Netzwerkkonfiguration schon
+  existiert. Eine VM, die älter ist als die IPv6-Konfiguration, braucht deshalb einmal
+  einen Neustart. Für DNS: zu jedem A-Eintrag gehört ein AAAA-Eintrag auf die IPv6.
 - **Postgres läuft self-hosted** im Container (nicht als Azure Database for PostgreSQL) —
   der Hauptvorteil von Managed Postgres (DB übersteht VM-Verlust) greift erst mit einer
   zweiten VM, was hier explizit nicht Teil der Kern-Phase ist.
