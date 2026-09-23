@@ -57,11 +57,8 @@ resource "azurerm_log_analytics_workspace" "core" {
   location            = azurerm_resource_group.core.location
   resource_group_name = azurerm_resource_group.core.name
   sku                 = "PerGB2018"
-  # 90 rather than the 30 included days: at a few tens of MB a month the extra
-  # retention costs cents, and 30 days is too short to look back at when a
-  # disk started filling up.
-  retention_in_days = 90
-  tags              = var.TAGS
+  retention_in_days   = 30
+  tags                = var.TAGS
 }
 
 resource "azurerm_virtual_machine_extension" "azure_monitor_agent" {
