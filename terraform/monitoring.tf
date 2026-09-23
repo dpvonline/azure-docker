@@ -110,13 +110,12 @@ resource "azurerm_monitor_data_collection_rule_association" "vm_perf" {
   depends_on              = [azurerm_virtual_machine_extension.azure_monitor_agent]
 }
 
-# VERIFY AFTER FIRST APPLY. A wrong counter specifier does not fail the apply,
-# it just means no rows ever arrive — and an alert that never fires is
-# indistinguishable from one that has nothing to report. Confirm with:
-#
-#   Perf | where ObjectName == "Logical Disk" | summarize by InstanceName, CounterName
-#
-# in the log-dpv-core workspace, roughly 15 minutes after the VM comes up.
+# The counter specifier above is verified: rows for /, /data/postgres,
+# /data/apps and /data/nextcloud arrive a few minutes after the agent starts.
+# This alert can still go blind if the agent itself stops reporting — then no
+# rows arrive, and "nothing below 20%" looks exactly like "no data". A full OS
+# disk is one way that happens, since the agent needs free space to start.
+# disk_space_blind below catches that case.
 resource "azurerm_monitor_scheduled_query_rules_alert_v2" "disk_space" {
   name                 = "alert-dpv-disk-space"
   location             = azurerm_resource_group.core.location
@@ -135,6 +134,43 @@ resource "azurerm_monitor_scheduled_query_rules_alert_v2" "disk_space" {
       | where InstanceName == "/" or InstanceName startswith "/data"
       | summarize FreePercent = avg(CounterValue) by Computer, InstanceName
       | where FreePercent < 20
+    KQL
+    time_aggregation_method = "Count"
+    threshold               = 0
+    operator                = "GreaterThan"
+
+    failing_periods {
+      minimum_failing_periods_to_trigger_alert = 1
+      number_of_evaluation_periods             = 1
+    }
+  }
+
+  action {
+    action_groups = [azurerm_monitor_action_group.ops.id]
+  }
+}
+
+# Dead man's switch for the alert above: fires when NO disk samples have
+# arrived for an hour, i.e. when the agent or the pipeline behind it is broken.
+# `summarize count()` without `by` always returns exactly one row, so an empty
+# Perf table yields n == 0 rather than no result at all.
+resource "azurerm_monitor_scheduled_query_rules_alert_v2" "disk_space_blind" {
+  name                 = "alert-dpv-disk-space-blind"
+  location             = azurerm_resource_group.core.location
+  resource_group_name  = azurerm_resource_group.core.name
+  scopes               = [azurerm_log_analytics_workspace.core.id]
+  description          = "No disk fill-level samples for an hour — the Azure Monitor Agent on vm-dpv-core is not reporting, so the disk-space alert is blind. Check the AzureMonitorLinuxAgent extension and free space on / (a full OS disk stops the agent)."
+  severity             = 2
+  evaluation_frequency = "PT1H"
+  window_duration      = "PT1H"
+  tags                 = var.TAGS
+
+  criteria {
+    query                   = <<-KQL
+      Perf
+      | where ObjectName == "Logical Disk" and CounterName == "% Free Space"
+      | summarize n = count()
+      | where n == 0
     KQL
     time_aggregation_method = "Count"
     threshold               = 0
