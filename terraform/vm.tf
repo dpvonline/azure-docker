@@ -122,6 +122,17 @@ resource "azurerm_linux_virtual_machine" "app" {
     azurerm_key_vault_secret.letsencrypt_email,
     azurerm_key_vault_secret.deploy_key_private,
   ]
+
+  # custom_data only runs on first boot, and changing it forces Terraform to
+  # replace the VM. Ignoring it means edits to cloud-init.yaml.tftpl (e.g. a
+  # new systemd timer) do NOT rebuild the running VM on the next apply: they
+  # get installed on the running VM by hand and are in cloud-init only so the
+  # NEXT deliberate rebuild picks them up. To apply a cloud-init change for
+  # real, rebuild explicitly:
+  #   terraform apply -replace=azurerm_linux_virtual_machine.app
+  lifecycle {
+    ignore_changes = [custom_data]
+  }
 }
 
 # The LUN numbers are the contract with cloud-init, which mounts by LUN

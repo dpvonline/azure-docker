@@ -189,9 +189,9 @@ Cutover A frei ist — und damit für den Abriss von AKS, dem teuersten Posten.
 6. **Ausgehende Mails** sind in der Testkopie per `-Datlassian.mail.senddisabled=true`
    abgeschaltet, sonst verschickt sie mit echten Daten Mails an echte Nutzer.
 
-**Laufender Betrieb:** Der wöchentliche Update-Lauf löscht Scheduler-Protokoll älter
-als 7 Tage. Confluence hält es sonst fest 90 Tage (im Code, nicht einstellbar) und die
-Tabelle wächst auf etwa 6 GB.
+**Laufender Betrieb:** Der Timer `dpv-confluence-prune` löscht täglich um 04:30 UTC
+Scheduler-Protokoll älter als 7 Tage. Confluence hält es sonst fest 90 Tage (im Code,
+nicht einstellbar) und die Tabelle wächst auf etwa 6 GB.
 
 ### Verifikation
 
