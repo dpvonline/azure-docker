@@ -18,10 +18,26 @@ resource "azurerm_dns_a_record" "auth" {
   target_resource_id  = azurerm_public_ip.vm.id
 }
 
+resource "azurerm_dns_aaaa_record" "auth" {
+  name                = "auth"
+  zone_name           = data.azurerm_dns_zone.scout_tools.name
+  resource_group_name = data.azurerm_dns_zone.scout_tools.resource_group_name
+  ttl                 = 60
+  target_resource_id  = azurerm_public_ip.vm_v6.id
+}
+
 resource "azurerm_dns_a_record" "wiki" {
   name                = "wiki"
   zone_name           = data.azurerm_dns_zone.scout_tools.name
   resource_group_name = data.azurerm_dns_zone.scout_tools.resource_group_name
   ttl                 = 60
   target_resource_id  = azurerm_public_ip.vm.id
+}
+
+resource "azurerm_dns_aaaa_record" "wiki" {
+  name                = "wiki"
+  zone_name           = data.azurerm_dns_zone.scout_tools.name
+  resource_group_name = data.azurerm_dns_zone.scout_tools.resource_group_name
+  ttl                 = 60
+  target_resource_id  = azurerm_public_ip.vm_v6.id
 }

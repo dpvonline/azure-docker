@@ -4,6 +4,14 @@ networks:
   dpv:
     name: dpv
     driver: bridge
+    # IPv6 inside the Docker network, so that published ports reach Caddy via
+    # ip6tables DNAT with the client's real address. Without it Docker still
+    # accepts IPv6 on :443, but hands the connection over through its userland
+    # proxy, and Caddy/Keycloak then see the Docker gateway instead of the
+    # visitor (e.g. in Keycloak's login events). Docker 27+ picks a unique
+    # local /64 for the network by itself, so no subnet is configured here.
+    # Changing this recreates the network: `docker compose down` + `up`.
+    enable_ipv6: true
 
 volumes:
   caddy_data:
