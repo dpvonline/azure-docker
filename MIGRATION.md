@@ -179,8 +179,13 @@ Cutover A frei ist — und damit für den Abriss von AKS, dem teuersten Posten.
    beim Neuerzeugen verwerfen würde. Anzupassen sind nur `hibernate.connection.url`
    (`jdbc:postgresql://postgres:5432/confluence`) und `hibernate.connection.password`
    (aus dem Key Vault, `postgres-confluence-password`).
-5. **Nur für die Testkopie:** Base URL (`bandana`, `atlassian.confluence.settings`) auf
-   `https://wiki.scout-tools.de`, Identity Provider (`AO_ED669C_IDP_CONFIG`: `ISSUER`,
+5. **Nur für die Testkopie:** Base URL auf `https://wiki.scout-tools.de`. Seit Confluence 10
+   liegen die globalen Einstellungen in **`plugin_setting`** (`_GLOBAL`,
+   `atlassian.confluence.settings`, JSON-Feld `baseUrl`), dazu dort
+   `synchrony_collaborative_editor_app_base_url` für den Editor. Der gleichnamige Eintrag
+   in `bandana` ist ein wirkungsloser Rest aus älteren Versionen — dort geändert, meldet
+   sich Confluence weiter mit dem alten Namen bei Keycloak. Confluence dafür stoppen.
+   Identity Provider (`AO_ED669C_IDP_CONFIG`: `ISSUER`,
    `SSO_URL`) auf `auth.scout-tools.de`. In der Keycloak-Kopie den SAML-Client
    `https://wiki.dpvonline.de` umbenannt, samt Base-URL, Redirect-URI und
    `saml_assertion_consumer_url_post`. Keycloak dafür stoppen, es cacht Clients. Das
