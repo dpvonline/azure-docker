@@ -47,13 +47,14 @@ Hostnamen, dieselbe Realm und dieselben Client-Secrets** — dann merkt das noch
 Lightsail laufende Nextcloud vom Umzug nichts außer einer geänderten IP. Ein
 vollständiger Dump/Restore erhält alle drei per Konstruktion.
 
-**Testen mit echten Hostnamen, ohne DNS anzufassen.** Produktiv-Hostnamen lokal in
-`/etc/hosts` auf die neue VM-IP zeigen lassen und Caddy für die Testphase auf
-`tls internal` stellen (Let's Encrypt kann nicht validieren, solange öffentliches DNS
-noch aufs alte System zeigt — Browser-Warnung wegklicken). Nötig, weil die Keycloak-
-Realm-Daten absolute Redirect-URIs auf `*.dpvonline.de` enthalten; unter
-`scout-tools.de` würden Login-Flows scheitern und man debuggt ein Problem, das es in
-Produktion nicht gibt.
+**Testen unter eigenen Testnamen, als geschlossenes Paar.** Die Kopien laufen unter
+`auth.scout-tools.de` und `wiki.scout-tools.de` (Variablen `DOMAIN_AUTH`,
+`DOMAIN_WIKI`) mit echten Let's-Encrypt-Zertifikaten. Weil die Realm- und
+Confluence-Daten absolute URLs auf `*.dpvonline.de` enthalten, werden in den *Kopien*
+Base URL, Identity Provider und SAML-Client auf die Testnamen umgestellt, sodass sich
+`wiki.scout-tools.de` gegen `auth.scout-tools.de` anmeldet (Details in Phase 1). Die
+Produktion bleibt dabei unberührt. Beim Cutover bringen frische Dumps die
+`dpvonline.de`-Werte zurück; zurückzustellen ist nichts, nur die beiden Secrets.
 
 **Das alte System bleibt stehen, bis das neue sich bewährt hat.** AKS wird erst
 abgerissen, wenn Cutover A eine Woche unauffällig gelaufen ist; Lightsail entsprechend
