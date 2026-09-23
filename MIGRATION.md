@@ -244,6 +244,8 @@ dauert nach den Messungen aus Phase 1 etwa 45–60 Minuten.
 
 ### Vorab-Checks im Fenster (5 Min.)
 
+- IPv6 auf der VM funktioniert (PR „IPv6 für die VM", vorab getestet unter
+  `scout-tools.de`).
 - Eigene IP ist in `ADMIN_IP_CIDRS`, SSH auf die VM geht. Sonst erst `tfvars` +
   `terraform apply` (nur NSG).
 - `kubectl` erreicht AKS (Zugangsdaten in eine eigene kubeconfig,
@@ -311,8 +313,9 @@ und Synchrony-Adresse **nicht** anfassen — die frischen Dumps enthalten bereit
 `terraform apply` — der Plan darf nur die beiden Secrets in-place ändern.
 
 **8 — DNS bei IONOS.** Für `auth` und `wiki`: A-Eintrag auf `4.182.232.115`,
-**AAAA-Eintrag löschen** (die VM hat keine IPv6-Adresse; ein stehengebliebener
-AAAA-Eintrag schickt Browser, die IPv6 bevorzugen, weiter zu AKS). Warten, bis
+AAAA-Eintrag auf die IPv6 der VM (`terraform output vm_public_ipv6`). **Beide**
+umstellen: ein AAAA-Eintrag, der auf AKS stehen bleibt, schickt Browser, die IPv6
+bevorzugen — also die meisten —, weiter dorthin. Warten, bis
 `dig +short auth.dpvonline.de @8.8.8.8` und `… AAAA …` den neuen Stand zeigen.
 
 **9 — Neustart.** Auf der VM `git pull` und `systemctl restart dpv-compose.service`.
@@ -324,6 +327,7 @@ Home-Verzeichnis ein paar Minuten, bis `/status` `RUNNING` meldet.
 **10 — Prüfen.**
 - `https://auth.dpvonline.de/realms/DPV/protocol/saml/descriptor`: `entityID` ist
   `https://auth.dpvonline.de/realms/DPV`, Zertifikat von Let's Encrypt.
+- Beides zusätzlich per IPv6: `curl -6 …`.
 - `https://wiki.dpvonline.de/status` meldet `RUNNING`, und
   `/rest/applinks/1.0/manifest` zeigt `<url>https://wiki.dpvonline.de</url>`.
 - Login ins Wiki von einem Gerät ohne bestehende Session, Seiten, Anhänge, Suche.
