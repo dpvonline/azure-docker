@@ -1,0 +1,11 @@
+[Unit]
+Description=Daily trigger for dpv-confluence-prune.service
+
+[Timer]
+# After the nightly 02:00 UTC pgbackrest backup, and on Sundays after the
+# 03:30 update run, so it never competes with either for the database.
+OnCalendar=*-*-* 04:30:00
+Persistent=true
+
+[Install]
+WantedBy=timers.target

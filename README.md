@@ -236,10 +236,21 @@ committen.
    # Schritt 2b: jetzt der Rest, inkl. VM — Deploy-Key ist bereits hinterlegt
    terraform apply
    ```
-   Änderungen an `cloud-init.yaml.tftpl` (oder an sonst was, das in `custom_data`
-   einfließt) erzwingen bei jedem künftigen `apply` einen VM-Replace — Terraform
-   kann `custom_data` auf einer laufenden VM nicht aktualisieren, nur neu erstellen.
-   Erwartet und unkritisch, solange noch keine echten Daten auf der Platte liegen.
+   **Änderungen an `cloud-init.yaml.tftpl` bauen die VM nicht neu.** cloud-init läuft
+   nur beim ersten Boot, und die VM ignoriert Änderungen an `custom_data`
+   (`lifecycle { ignore_changes = [custom_data] }` in `terraform/vm.tf`). Neues, das
+   über cloud-init installiert wird — etwa ein zusätzlicher systemd-Timer —, kommt
+   deshalb **zweimal** rein: auf der laufenden VM von Hand, und in cloud-init, damit
+   der nächste Neuaufbau es mitbringt. Beispiel für einen neuen Timer aus
+   `scripts/systemd/`:
+   ```
+   sudo git -C /opt/dpv/repo pull
+   sudo cp /opt/dpv/scripts/systemd/<name>.{service,timer} /etc/systemd/system/
+   sudo systemctl daemon-reload && sudo systemctl enable --now <name>.timer
+   ```
+   Soll eine cloud-init-Änderung wirklich greifen, die VM bewusst neu bauen:
+   `terraform apply -replace=azurerm_linux_virtual_machine.app`. Die Daten überleben
+   das, alle drei Datenplatten sind eigene Ressourcen.
 
    `DOMAIN_AUTH`/`LETSENCRYPT_EMAIL` sind davon **nicht** betroffen — die liegen
    bewusst in Key Vault statt in `custom_data`. Eine Domain-Änderung braucht also

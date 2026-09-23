@@ -136,10 +136,16 @@ runcmd:
   # require a VM rebuild, only this initial copy-in does.
   - cp /opt/dpv/scripts/systemd/dpv-update.service /etc/systemd/system/dpv-update.service
   - cp /opt/dpv/scripts/systemd/dpv-update.timer /etc/systemd/system/dpv-update.timer
+  # Daily trim of Confluence's scheduler history, see
+  # scripts/confluence-prune-scheduler-history.sh. Harmless before Confluence
+  # is deployed: the script exits early when the table does not exist.
+  - cp /opt/dpv/scripts/systemd/dpv-confluence-prune.service /etc/systemd/system/dpv-confluence-prune.service
+  - cp /opt/dpv/scripts/systemd/dpv-confluence-prune.timer /etc/systemd/system/dpv-confluence-prune.timer
 
   - systemctl daemon-reload
   - systemctl enable --now dpv-compose.service
   - systemctl enable --now dpv-update.timer
+  - systemctl enable --now dpv-confluence-prune.timer
 
   # Nightly full backup (continuous WAL archiving handles the gaps in between)
   - echo "0 2 * * * root /opt/dpv/scripts/pgbackrest-full-backup.sh >> /var/log/pgbackrest-full.log 2>&1" > /etc/cron.d/pgbackrest-full

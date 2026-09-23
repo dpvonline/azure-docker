@@ -16,6 +16,7 @@ KEY_VAULT_NAME              = "dpv-core-kv01"     # global eindeutig
 BACKUP_STORAGE_ACCOUNT_NAME = "dpvbackups01"      # global eindeutig, nur a-z0-9
 
 DOMAIN_AUTH       = "auth.scout-tools.de" # zum Testen; für den Live-Cutover später auf eine dpvonline.de-Subdomain umstellen
+DOMAIN_WIKI       = "wiki.scout-tools.de" # dito; beim Cutover A auf wiki.dpvonline.de
 LETSENCRYPT_EMAIL = "cloudadmin@dpvonline.de"
 
 UBUNTU_PRO_TOKEN = "C1abcDEFghiJKLmnoPQRstuVWXyz123"  # von ubuntu.com/pro, kostenloses Personal-Abo

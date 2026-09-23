@@ -5,3 +5,11 @@
 {$DOMAIN_AUTH} {
 	reverse_proxy keycloak:8080
 }
+
+# DOMAIN_WIKI is a public test hostname (wiki.scout-tools.de) until Cutover A,
+# so Let's Encrypt can validate it like DOMAIN_AUTH — no internal certificate
+# or /etc/hosts entry needed. Switching to wiki.dpvonline.de later is the same
+# as for DOMAIN_AUTH: change the Key Vault secret, restart dpv-compose.service.
+{$DOMAIN_WIKI} {
+	reverse_proxy confluence:8090
+}

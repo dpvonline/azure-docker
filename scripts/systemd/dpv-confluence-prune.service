@@ -1,0 +1,9 @@
+[Unit]
+Description=Trim Confluence scheduled-job history (scheduler_run_details)
+After=docker.service dpv-compose.service
+Requires=docker.service
+
+[Service]
+Type=oneshot
+ExecStart=/opt/dpv/scripts/confluence-prune-scheduler-history.sh
+TimeoutStartSec=1800
