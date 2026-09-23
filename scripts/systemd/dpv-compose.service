@@ -1,0 +1,25 @@
+[Unit]
+Description=DPV docker compose stack
+After=network-online.target docker.service
+Wants=network-online.target
+Requires=docker.service
+# Never stop retrying (see Restart= below). A missing data disk keeps failing
+# and logging to syslog every RestartSec, which is what the monitoring alert
+# watches — giving up after a few attempts would make it go quiet instead.
+StartLimitIntervalSec=0
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/opt/dpv/scripts/boot.sh
+# mount-data-disks.sh alone may wait up to 5 min per disk for a late
+# attachment, on top of pulling and building images.
+TimeoutStartSec=1500
+# boot.sh refuses to start the stack while a data disk is missing rather than
+# silently falling back to the OS disk. Retrying picks the disk up as soon as
+# terraform has attached it, without anyone having to intervene.
+Restart=on-failure
+RestartSec=120
+
+[Install]
+WantedBy=multi-user.target

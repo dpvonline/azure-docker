@@ -18,12 +18,21 @@ log() {
   echo "$(date -u +'%Y-%m-%dT%H:%M:%SZ') $1" | tee -a "$LOG_FILE"
 }
 
+# Like log(), but also to syslog at error level, which the monitoring alert
+# watches. The log file alone is not enough: this script aborted every single
+# Sunday for five weeks and the only trace was a file nobody reads (see
+# MIGRATION.md).
+log_failure() {
+  log "$1"
+  logger -p user.err -t dpv-update "$1"
+}
+
 rollback() {
   log "rolling back to ${PREV_COMMIT}"
   git -C "$REPO_DIR" reset --hard "$PREV_COMMIT" >>"$LOG_FILE" 2>&1
   cd "$COMPOSE_DIR"
   docker compose up -d --build >>"$LOG_FILE" 2>&1
-  log "=== ROLLBACK complete — manual investigation needed, see ${LOG_FILE} ==="
+  log_failure "=== ROLLBACK to ${PREV_COMMIT} complete — manual investigation needed, see ${LOG_FILE} ==="
   exit 1
 }
 
@@ -36,13 +45,13 @@ log "current commit: ${PREV_COMMIT}"
 log "taking pre-update safety backup..."
 if ! docker compose exec -T --user postgres postgres \
     pgbackrest --stanza=main --config=/etc/pgbackrest/pgbackrest.conf backup --type=full >>"$LOG_FILE" 2>&1; then
-  log "ABORT: pre-update backup failed, not touching anything"
+  log_failure "ABORT: pre-update backup failed, not touching anything"
   exit 1
 fi
 
 log "pulling latest git changes..."
 if ! git -C "$REPO_DIR" pull >>"$LOG_FILE" 2>&1; then
-  log "ABORT: git pull failed, not touching anything"
+  log_failure "ABORT: git pull failed, not touching anything"
   exit 1
 fi
 
