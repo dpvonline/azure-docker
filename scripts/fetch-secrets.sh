@@ -4,7 +4,7 @@
 # again by a systemd unit on every subsequent boot/reboot, so nothing is
 # ever hand-entered or persisted outside Key Vault.
 #
-# DOMAIN_AUTH/DOMAIN_WIKI/LETSENCRYPT_EMAIL live in Key Vault too (not passed as args)
+# DOMAIN_*/LETSENCRYPT_EMAIL live in Key Vault too (not passed as args)
 # specifically so changing them is just `terraform apply` (updates the
 # secret) + `systemctl restart dpv-compose.service` on the VM — no VM
 # replacement, since nothing here is baked into custom_data.
@@ -21,6 +21,8 @@ get_secret() {
 
 DOMAIN_AUTH="$(get_secret domain-auth)"
 DOMAIN_WIKI="$(get_secret domain-wiki)"
+DOMAIN_CLOUD="$(get_secret domain-cloud)"
+DOMAIN_OFFICE="$(get_secret domain-office)"
 LETSENCRYPT_EMAIL="$(get_secret letsencrypt-email)"
 POSTGRES_SUPERUSER_PASSWORD="$(get_secret postgres-superuser-password)"
 POSTGRES_KEYCLOAK_PASSWORD="$(get_secret postgres-keycloak-password)"
@@ -30,17 +32,38 @@ KEYCLOAK_ADMIN_PASSWORD="$(get_secret keycloak-admin-password)"
 # initialization, so the passwords must exist by then (see MIGRATION.md).
 POSTGRES_CONFLUENCE_PASSWORD="$(get_secret postgres-confluence-password)"
 POSTGRES_NEXTCLOUD_PASSWORD="$(get_secret postgres-nextcloud-password)"
+COLLABORA_ADMIN_PASSWORD="$(get_secret collabora-admin-password)"
+
+COMPOSE_FILE="docker-compose.yml:docker-compose.postgres.yml:docker-compose.keycloak.yml:docker-compose.confluence.yml"
+# Nextcloud joins the stack only once an installation has been copied over
+# (MIGRATION.md, Phase 3). On an empty /data/apps/nextcloud the image would
+# start the public setup wizard — reachable by anyone, under a real name.
+if [ -f /data/apps/nextcloud/config/config.php ]; then
+  COMPOSE_FILE="${COMPOSE_FILE}:docker-compose.nextcloud.yml"
+fi
+# Background jobs only for the production instance. The test copy works on real
+# data, and its calendar reminders and notification mails would reach real
+# users (see nextcloud-cron in docker-compose.nextcloud.yml).
+COMPOSE_PROFILES=""
+if [ "${DOMAIN_CLOUD}" = "cloud.dpvonline.de" ]; then
+  COMPOSE_PROFILES="nextcloud-live"
+fi
 
 umask 077
 
 cat > "${COMPOSE_DIR}/.env" <<EOF
-COMPOSE_FILE=docker-compose.yml:docker-compose.postgres.yml:docker-compose.keycloak.yml:docker-compose.confluence.yml
+COMPOSE_FILE=${COMPOSE_FILE}
+COMPOSE_PROFILES=${COMPOSE_PROFILES}
 DOMAIN_AUTH=${DOMAIN_AUTH}
 DOMAIN_WIKI=${DOMAIN_WIKI}
+DOMAIN_CLOUD=${DOMAIN_CLOUD}
+DOMAIN_OFFICE=${DOMAIN_OFFICE}
 LETSENCRYPT_EMAIL=${LETSENCRYPT_EMAIL}
 POSTGRES_SUPERUSER_PASSWORD=${POSTGRES_SUPERUSER_PASSWORD}
 POSTGRES_KEYCLOAK_PASSWORD=${POSTGRES_KEYCLOAK_PASSWORD}
 KEYCLOAK_ADMIN_PASSWORD=${KEYCLOAK_ADMIN_PASSWORD}
+POSTGRES_NEXTCLOUD_PASSWORD=${POSTGRES_NEXTCLOUD_PASSWORD}
+COLLABORA_ADMIN_PASSWORD=${COLLABORA_ADMIN_PASSWORD}
 EOF
 chown root:root "${COMPOSE_DIR}/.env"
 chmod 600 "${COMPOSE_DIR}/.env"

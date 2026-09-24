@@ -21,14 +21,20 @@ services:
   caddy:
     image: caddy:2.11-alpine
     restart: unless-stopped
+    # Map form (not a list) so docker-compose.nextcloud.yml can add network
+    # aliases to it.
     networks:
-      - dpv
+      dpv: {}
     ports:
       - "80:80"
       - "443:443"
     environment:
       DOMAIN_AUTH: ${DOMAIN_AUTH}
       DOMAIN_WIKI: ${DOMAIN_WIKI}
+      # Always set, even before Nextcloud is deployed: the Caddyfile has site
+      # blocks for both, and an empty site address would stop Caddy entirely.
+      DOMAIN_CLOUD: ${DOMAIN_CLOUD}
+      DOMAIN_OFFICE: ${DOMAIN_OFFICE}
       LETSENCRYPT_EMAIL: ${LETSENCRYPT_EMAIL}
     volumes:
       - ./Caddyfile:/etc/caddy/Caddyfile:ro

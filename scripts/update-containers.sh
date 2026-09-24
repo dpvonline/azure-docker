@@ -86,7 +86,18 @@ while [ "$elapsed" -lt "$HEALTH_TIMEOUT_SECONDS" ]; do
     postgres_ok=true
   fi
 
-  if [ "$running_count" -eq "$expected_count" ] && $keycloak_ok && $postgres_ok; then
+  # Only once Nextcloud is part of the stack (fetch-secrets.sh). A patch bump
+  # makes the image run `occ upgrade` on start, which is what this waits out.
+  nextcloud_ok=true
+  if docker compose config --services | grep -qx nextcloud; then
+    nextcloud_ok=false
+    if docker compose exec -T --user www-data nextcloud php occ status --output=json 2>/dev/null \
+        | grep -q '"maintenance":false,"needsDbUpgrade":false'; then
+      nextcloud_ok=true
+    fi
+  fi
+
+  if [ "$running_count" -eq "$expected_count" ] && $keycloak_ok && $postgres_ok && $nextcloud_ok; then
     healthy=true
     break
   fi

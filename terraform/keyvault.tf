@@ -106,6 +106,20 @@ resource "azurerm_key_vault_secret" "postgres_nextcloud" {
   depends_on   = [azurerm_role_assignment.deployer_kv_officer]
 }
 
+# Admin console of Collabora Online (https://<DOMAIN_OFFICE>/browser/dist/admin/admin.html).
+# Nothing else logs in with it — Nextcloud talks to Collabora via WOPI, not this account.
+resource "random_password" "collabora_admin" {
+  length  = 24
+  special = false
+}
+
+resource "azurerm_key_vault_secret" "collabora_admin" {
+  name         = "collabora-admin-password"
+  value        = random_password.collabora_admin.result
+  key_vault_id = azurerm_key_vault.core.id
+  depends_on   = [azurerm_role_assignment.deployer_kv_officer]
+}
+
 resource "azurerm_key_vault_secret" "ubuntu_pro_token" {
   name         = "ubuntu-pro-token"
   value        = var.UBUNTU_PRO_TOKEN
@@ -126,6 +140,20 @@ resource "azurerm_key_vault_secret" "domain_auth" {
 resource "azurerm_key_vault_secret" "domain_wiki" {
   name         = "domain-wiki"
   value        = var.DOMAIN_WIKI
+  key_vault_id = azurerm_key_vault.core.id
+  depends_on   = [azurerm_role_assignment.deployer_kv_officer]
+}
+
+resource "azurerm_key_vault_secret" "domain_cloud" {
+  name         = "domain-cloud"
+  value        = var.DOMAIN_CLOUD
+  key_vault_id = azurerm_key_vault.core.id
+  depends_on   = [azurerm_role_assignment.deployer_kv_officer]
+}
+
+resource "azurerm_key_vault_secret" "domain_office" {
+  name         = "domain-office"
+  value        = var.DOMAIN_OFFICE
   key_vault_id = azurerm_key_vault.core.id
   depends_on   = [azurerm_role_assignment.deployer_kv_officer]
 }

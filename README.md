@@ -9,8 +9,11 @@ hier funktioniert und der DNS-Cutover erfolgt ist).
 Dieser erste Ausbau deckt bewusst nur ab: VM, Netzwerk, Key Vault, Postgres (self-hosted
 im Container + pgBackRest-Backups gegen Azure Blob), Keycloak, Caddy (automatisches HTTPS).
 
-**Noch nicht enthalten** (spätere Schritte): Confluence, Nextcloud, Redis,
-Standby-VM/Failover, automatisierte DNS-Umstellung für dpvonline.de. Das Biber-Backend
+Seit Cutover A (24.09.2026) laufen Keycloak und Confluence hier produktiv. Nextcloud
+(mit Redis und Collabora) ist als Compose-Datei vorhanden und kommt in Phase 3/4 dazu.
+
+**Noch nicht enthalten** (spätere Schritte): Standby-VM/Failover, automatisierte
+DNS-Umstellung für dpvonline.de. Das Biber-Backend
 wird nicht mehr gebraucht und entfällt ersatzlos.
 
 Wie diese Dienste von AKS bzw. AWS Lightsail hierher kommen, steht in
@@ -23,7 +26,7 @@ Rollback) — siehe unten.
 
 - **1 Azure VM** (Ubuntu 24.04 LTS, **Standard_D4ps_v6**: 4 vCPU ARM64 / Azure Cobalt
   100, 16 GiB, 6.400 IOPS), non-spot, Docker Compose betreibt Caddy, Keycloak,
-  Confluence und Postgres. Ausgesucht nach Preis: ~105 €/Monat Liste gegenüber ~120 €
+  Confluence und Postgres, ab Phase 3 auch Nextcloud, Redis und Collabora. Ausgesucht nach Preis: ~105 €/Monat Liste gegenüber ~120 €
   für die Intel-`B4s_v2` davor, und dazu eigene Kerne statt Burst-Credits. Alle
   x86-Größen mit 4 vCPU / 16 GiB kosten in der Region gleich viel oder mehr, bis auf
   die AMD-`B4as_v2`. Für die fehlt aber Quota (*Standard Basv2 Family vCPUs* steht auf
