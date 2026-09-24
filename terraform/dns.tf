@@ -41,3 +41,49 @@ resource "azurerm_dns_aaaa_record" "wiki" {
   ttl                 = 60
   target_resource_id  = azurerm_public_ip.vm_v6.id
 }
+
+# Test names for the Nextcloud copy (Phase 3). These two records predate this
+# repo: they were created by azure-infrastructure (pointing at the AKS ingress)
+# and handed over on 24.09.2026 via `terraform state rm` there — they are NOT
+# created here, they have to be imported once before the first apply that
+# contains them (see MIGRATION.md, Phase 3, and the commands below):
+#
+#   Z="$(az network dns zone show -g Infra -n scout-tools.de --query id -o tsv)"
+#   terraform import azurerm_dns_a_record.cloud     "$Z/A/cloud"
+#   terraform import azurerm_dns_aaaa_record.cloud  "$Z/AAAA/cloud"
+#   terraform import azurerm_dns_a_record.office    "$Z/A/office"
+#   terraform import azurerm_dns_aaaa_record.office "$Z/AAAA/office"
+#
+# (Import blocks would do this declaratively, but Terraform 1.5 only accepts a
+# literal id there, which would put the subscription id into this public repo.)
+resource "azurerm_dns_a_record" "cloud" {
+  name                = "cloud"
+  zone_name           = data.azurerm_dns_zone.scout_tools.name
+  resource_group_name = data.azurerm_dns_zone.scout_tools.resource_group_name
+  ttl                 = 60
+  target_resource_id  = azurerm_public_ip.vm.id
+}
+
+resource "azurerm_dns_aaaa_record" "cloud" {
+  name                = "cloud"
+  zone_name           = data.azurerm_dns_zone.scout_tools.name
+  resource_group_name = data.azurerm_dns_zone.scout_tools.resource_group_name
+  ttl                 = 60
+  target_resource_id  = azurerm_public_ip.vm_v6.id
+}
+
+resource "azurerm_dns_a_record" "office" {
+  name                = "office"
+  zone_name           = data.azurerm_dns_zone.scout_tools.name
+  resource_group_name = data.azurerm_dns_zone.scout_tools.resource_group_name
+  ttl                 = 60
+  target_resource_id  = azurerm_public_ip.vm.id
+}
+
+resource "azurerm_dns_aaaa_record" "office" {
+  name                = "office"
+  zone_name           = data.azurerm_dns_zone.scout_tools.name
+  resource_group_name = data.azurerm_dns_zone.scout_tools.resource_group_name
+  ttl                 = 60
+  target_resource_id  = azurerm_public_ip.vm_v6.id
+}

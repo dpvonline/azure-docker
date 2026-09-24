@@ -13,3 +13,22 @@
 {$DOMAIN_WIKI} {
 	reverse_proxy confluence:8090
 }
+
+# Nextcloud and Collabora — cloud./office.scout-tools.de for the test copy until
+# Cutover B, then the dpvonline.de names (same switch as above). Until
+# docker-compose.nextcloud.yml is part of the stack these answer 502, which is
+# harmless.
+{$DOMAIN_CLOUD} {
+	# CalDAV/CardDAV discovery for calendar and contacts clients. Handled here
+	# because Nextcloud's own .htaccess rule would redirect to http:// behind a
+	# TLS-terminating proxy.
+	redir /.well-known/carddav /remote.php/dav/ 301
+	redir /.well-known/caldav /remote.php/dav/ 301
+	header Strict-Transport-Security "max-age=15552000; includeSubDomains"
+	reverse_proxy nextcloud:80
+}
+
+# WebSockets (the editor session) pass through reverse_proxy without extra config.
+{$DOMAIN_OFFICE} {
+	reverse_proxy collabora:9980
+}

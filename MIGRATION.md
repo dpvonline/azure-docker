@@ -10,7 +10,7 @@ wie wir dorthin kommen.
 |---|---|---|---|
 | Keycloak | AKS (`azure-infrastructure`) | Postgres im Cluster | `auth.dpvonline.de` |
 | Confluence | AKS | Postgres im Cluster | `wiki.dpvonline.de` |
-| Nextcloud + Collabora | **AWS Lightsail** (Docker Compose) | MariaDB 10.5 | `cloud.` / `office.dpvonline.de` |
+| Nextcloud + Collabora | **AWS Lightsail** (Docker Compose), Nutzerdaten auf AWS EFS | MariaDB 10.6 | `cloud.` / `office.dpvonline.de` |
 | Redis | AKS (nur Cache) | – | – |
 | Biber-Backend | **wird nicht mehr gebraucht** | – | – |
 
@@ -29,7 +29,7 @@ Postgres, ein Reverse Proxy (Caddy), drei Platten:
 |---|---|---|---|---|
 | 1 | Premium SSD v2 | 32 GiB | `/data/postgres` | Postgres |
 | 2 | Premium SSD v2 | 64 GiB | `/data/apps` | Confluence-Home, Nextcloud-App, Redis |
-| 3 | Standard SSD | 256 GiB | `/data/nextcloud` | Nextcloud-Nutzerdaten (~150 GB) |
+| 3 | Standard SSD | 256 GiB | `/data/nextcloud` | Nextcloud-Nutzerdaten (~158 GB, siehe Phase 3) |
 
 ## Grundsätze
 
@@ -385,7 +385,8 @@ sie, oder sie müssten zurückmigriert werden. Deshalb Schritt 10 gründlich.
 - Die Testnamen `auth.` und `wiki.scout-tools.de` bedient die VM nach Schritt 9 nicht
   mehr; die DNS-Einträge dafür in Phase 5 aufräumen.
 - `office.dpvonline.de` zeigt auf AKS, antwortet aber schon heute nicht (Stand
-  23.09.). Das betrifft Collabora für Nextcloud und gehört zu Phase 3.
+  23.09.). Auf AKS lief dafür nie etwas, nur eine Ingress-Regel; Collabora wird in
+  Phase 3 auf der VM neu aufgesetzt.
 
 > **Client-Secrets in diesem Fenster nicht rotieren.** Das noch auf Lightsail laufende
 > Nextcloud authentifiziert gegen diese Keycloak-Instanz. Rotation erst in Phase 5.
@@ -604,77 +605,289 @@ dasselbe.
 ## Phase 3 — Nextcloud aufbauen
 
 **Ziel:** Nextcloud läuft auf der neuen VM auf Postgres, mit einer Kopie der
-Lightsail-Daten. DNS unverändert, keine Nutzer betroffen.
+Lightsail-Daten, unter `cloud.scout-tools.de`, Collabora unter `office.scout-tools.de`.
+DNS für `cloud.`/`office.dpvonline.de` unverändert, keine Nutzer betroffen.
 
-Der eigentliche Knackpunkt ist die DB-Konvertierung. Sie hat beim letzten Versuch
-grundsätzlich funktioniert und nur bei der Forms-App gehakt — aktuell laufen keine
-Umfragen, das ist also der günstigste Zeitpunkt.
+Nach dem Muster von Phase 1: Die Kopie bekommt eigene Testnamen und einen eigenen
+Keycloak-Client, schreibt keine Mails und hat keine Hintergrundjobs. Beim Cutover
+bringt eine frische Kopie von `config.php` die Produktionswerte zurück; zurückzustellen
+ist nichts.
+
+### Stand 24.09.2026: Vorarbeiten auf Lightsail erledigt
+
+Gemessen und gemacht, bevor irgendetwas kopiert wird — so wandern die teuren Daten
+nur einmal (plus Delta) über die Leitung:
+
+- **Ausgangslage:** Nextcloud 31.0.9 im unveränderten Image `nextcloud:31.0.9` (das
+  eigene `app/Dockerfile` aus `nextcloud-config` war nicht in Gebrauch), MariaDB 10.6
+  (458 MB), Redis ohne Passwort, Collabora `25.04.5.2`. Der Compose-Stack liegt in
+  `~/workspace/nextcloud-config`, Branch `local-config` mit lokalen Änderungen. SSH:
+  `ssh -p 1987 -i Lightsail-DPV-Cloud.pem ubuntu@cloud.dpvonline.de`. Die Instanz hat
+  1 GB RAM (+7 GB Swap), Ubuntu 20.04.
+- **Nutzerdaten liegen auf AWS EFS** (NFS, `/data/nextcloud/user_data`), die Backups des
+  `backup`-Containers auf einem zweiten EFS (`/backup/nextcloud`, 113 GB). Ein
+  Lightsail-Snapshot enthält **keines** der beiden, nur Systemplatte, App und MariaDB.
+- **Hintergrundjobs liefen seit dem 20.08. nicht**: Modus `cron`, aber weder im
+  Container noch auf dem Host ein Cron. Seitdem `/etc/cron.d/nextcloud-cron` auf dem
+  Host, alle 5 Minuten, mit `flock`.
+- `loglevel` 0 → 2, `overwrite.cli.url` auf `https://`, `nextcloud.log` (25 GB, wurde
+  mangels Cron nie rotiert) geleert.
+- **Update 31.0.9 → 31.0.14 → 32.0.15 → 33.0.9**, je 2–3 Minuten Wartungsmodus, alle
+  Apps in stabilen Versionen mitgezogen. Grund: Postgres 18 unterstützt Nextcloud erst
+  ab 33. Die Konvertierung läuft damit gegen eine offiziell unterstützte Kombination,
+  und im Cutover steckt kein Upgrade. Vorher Snapshot und
+  `/backup/nextcloud/pre-upgrade-31.0.9-2026-09-24-1436.sql.gz`. Die Meldung „The
+  following apps have been disabled" des Image-Entrypoints beim ersten Sprung ist ein
+  Anzeigefehler — alle Apps blieben aktiv.
+
+**Was tatsächlich umzieht** (von 204 GB auf EFS):
+
+| Inhalt | GB | kopieren |
+|---|---:|---|
+| Gruppenordner (20 Stück), Inhalt | ~114 | ja |
+| Persönliche Dateien | 13,4 | ja |
+| Versionen (Gruppenordner + persönlich) | 1,7 | ja |
+| Papierkorb (Gruppenordner 23,8 + persönlich 3,9) | 27,7 | ja; läuft seit dem Cron nach 30 Tagen ab |
+| Vorschaubilder (`appdata_*/preview`) | 20,5 | nein, entstehen neu |
+| abgebrochene Uploads, Cache | 1,8 | nein |
+| App-Verzeichnis (`/data/nextcloud/data`, Systemplatte) | 1,4 | ja, nach `/data/apps/nextcloud` |
+
+Ergebnis ~158 GB auf der 256-GiB-Platte, AWS-Egress ~14 $ einmalig. `files_external`
+ist aus; SSO läuft über die App `oidc_login` gegen den Keycloak-Client `nextcloud`
+(ID = `preferred_username`). Keycloak lässt seit dem 24.09. per `pattern`-Validator
+`^[a-zA-Z0-9 _.@'-]+$` nur noch Benutzernamen zu, die Nextcloud als ID akzeptiert —
+Umlaute ließen `oidc_login` vorher still abstürzen.
+
+### Aufbau auf der VM
+
+Im Repo: [`docker-compose.nextcloud.yml`](compose/docker-compose.nextcloud.yml) mit
+`nextcloud` (`nextcloud:33.0.9-apache`), `nextcloud-cron`, `redis` und `collabora`,
+dazu zwei Blöcke im [Caddyfile](compose/Caddyfile). Zwei Sicherungen stecken in
+[`fetch-secrets.sh`](scripts/fetch-secrets.sh):
+
+- Die Datei kommt erst in `COMPOSE_FILE`, wenn `/data/apps/nextcloud/config/config.php`
+  existiert. Auf einem leeren Verzeichnis zeigte das Image den öffentlichen
+  Installationsassistenten.
+- `nextcloud-cron` läuft nur, wenn `DOMAIN_CLOUD` `cloud.dpvonline.de` ist (Profil
+  `nextcloud-live`). Die Kopie arbeitet mit echten Daten; ihre Kalender-Erinnerungen und
+  Benachrichtigungen gingen sonst an echte Nutzer.
+
+Collabora erreicht Nextcloud und umgekehrt über ihre öffentlichen Namen. Die sind als
+Aliase von Caddy im Docker-Netz eingetragen, der Verkehr bleibt also auf der VM, und
+das Zertifikat passt trotzdem.
+
+### Vorbereitung
+
+1. **Keycloak-Client für die Kopie.** In Realm `DPV` den Client `nextcloud` exportieren
+   (*Clients → nextcloud → Action → Export*), in der JSON `clientId` auf
+   `nextcloud-test`, `id` und `secret` entfernen, `rootUrl`/`baseUrl`/`redirectUris`/
+   `post.logout.redirect.uris` auf `https://cloud.scout-tools.de…` umschreiben, als neuen
+   Client importieren, Secret neu erzeugen und notieren. Die Mapper (`roles`,
+   `nextcloudquota`, …) kommen mit. Der produktive Client bleibt unberührt.
+2. **Terraform** (vom PR-Branch aus, *vor* dem Merge — sonst fehlen der VM beim
+   nächsten Neustart die neuen Secrets). In `terraform.tfvars`
+   `DOMAIN_CLOUD = "cloud.scout-tools.de"`, `DOMAIN_OFFICE = "office.scout-tools.de"`,
+   zusätzlich `3.65.3.213/32` (Lightsail) in `ADMIN_IP_CIDRS` für das `rsync`. Dann
+   einmalig die vier DNS-Einträge übernehmen, die bis zum 24.09. dem alten Repo gehörten
+   (dort per `state rm` abgegeben):
+   ```
+   Z="$(az network dns zone show -g Infra -n scout-tools.de --query id -o tsv)"
+   terraform import azurerm_dns_a_record.cloud     "$Z/A/cloud"
+   terraform import azurerm_dns_aaaa_record.cloud  "$Z/AAAA/cloud"
+   terraform import azurerm_dns_a_record.office    "$Z/A/office"
+   terraform import azurerm_dns_aaaa_record.office "$Z/AAAA/office"
+   terraform plan
+   ```
+   Erwartet: die vier Records **in-place** (Ziel von der AKS-IP auf die der VM), neu
+   `domain-cloud`, `domain-office`, `collabora-admin-password` samt Zufallspasswort,
+   die NSG-Regel in-place. Nichts zu ersetzen oder zu löschen. Dann `terraform apply`,
+   PR mergen, auf der VM `sudo git -C /opt/dpv/repo pull` und
+   `sudo systemctl restart dpv-compose.service`. Nextcloud ist dabei noch nicht Teil
+   des Stacks; Caddy holt schon die Zertifikate.
 
 ### Schritte
 
-1. **Compose aus `nextcloud-config` übernehmen und ausdünnen.** Es entfallen `proxy`
-   und `letsencrypt-companion` (Caddy übernimmt) sowie `backup` (Azure Backup und
-   pgBackRest übernehmen). Es bleiben `app`, `redis` und `office`.
-2. **`app/Dockerfile` ausdünnen.** Die Datei ist im Kern das offizielle Beispiel aus
-   der [nextcloud/docker](https://github.com/nextcloud/docker)-README — `ffmpeg`,
-   `ghostscript` und die ImageMagick-Extras bleiben, die sind für Vorschaubilder da.
-   Raus sollten:
-   - **`imap`** — die Extension wurde in PHP 8.4 aus dem Core entfernt; da
-     `nextcloud:production-apache` ein floating Tag ist, bricht der Build sonst
-     irgendwann beim Update weg.
-   - **`smbclient`** — nur nötig bei SMB-External-Storage, vorher mit
-     `occ files_external:list` prüfen.
-3. **MariaDB 10.5 temporär** als Container mit auf die VM, in derselben Version wie auf
-   Lightsail. Nur für die Konvertierung, verschwindet danach.
-4. **Dateien übertragen** — `rsync` von Lightsail nach `/data/nextcloud` (Platte 3).
-   ~150 GB; die AWS-Egress-Kosten liegen bei ~0,09 $/GB, also ~14 $ einmalig.
-5. **DB übertragen** — `mysqldump` von Lightsail in den MariaDB-Container, Nextcloud
-   dagegen hochfahren und prüfen, dass es *vor* der Konvertierung läuft.
-6. **Forms entfernen** — `occ app:remove forms` löscht die Tabellen der App, sodass
-   `db:convert-type` gar nicht erst darüber stolpern kann. Kostet die historischen
-   Formulardaten; bei null aktiven Umfragen der beste Moment dafür.
-7. **Konvertieren** — `occ maintenance:mode --on`, dann
-   `occ db:convert-type --all-apps pgsql nextcloud <host> nextcloud`. Danach MariaDB
-   entfernen.
-8. Caddy-Routen für `cloud.` und `office.`, vorerst `tls internal`.
+**1 — Verzeichnisse** auf der VM:
+
+```
+sudo install -d -o 33 -g 33 -m 750 /data/apps/nextcloud
+sudo chown 33:33 /data/nextcloud && sudo chmod 770 /data/nextcloud
+```
+
+**2 — Dateien.** Lightsail schiebt direkt zur VM; der VM-Schlüssel kommt per
+Agent-Forwarding mit und bleibt auf dem Mac. Lokal:
+
+```
+ssh-add ~/.ssh/dpv_core_vm_ed25519
+ssh -A -p 1987 -i ~/Documents/SSH/Lightsail-DPV-Cloud.pem ubuntu@cloud.dpvonline.de
+```
+
+Auf Lightsail, in `tmux` (der Datenlauf dauert Stunden und ist beliebig oft
+wiederholbar, jeder weitere Lauf überträgt nur noch das Delta):
+
+```
+VM=dpvadmin@4.182.232.115
+R="sudo SSH_AUTH_SOCK=$SSH_AUTH_SOCK rsync -aH --numeric-ids --delete --info=progress2 --rsync-path='sudo rsync'"
+eval $R /data/nextcloud/data/ $VM:/data/apps/nextcloud/
+eval $R --exclude=/lost+found --exclude=/nextcloud.log --exclude='/appdata_*/preview/' \
+  --exclude='/*/uploads/' --exclude='/*/cache/' \
+  /data/nextcloud/user_data/ $VM:/data/nextcloud/
+```
+
+Beim ersten Mal fragt `ssh` nach dem Host-Key der VM: mit
+`ssh-keygen -lf /etc/ssh/ssh_host_ed25519_key.pub` auf der VM vergleichen. Ausgeschlossene
+Pfade löscht `--delete` auf der VM nicht — `lost+found` bleibt also stehen.
+
+**3 — Datenbank.** Eine MariaDB 10.6 nur für die Konvertierung, unter dem Namen `db`,
+den `config.php` erwartet. Auf der VM:
+
+```
+DBPW="$(sudo docker run --rm -v /data/apps/nextcloud:/var/www/html nextcloud:33.0.9-apache \
+  php -r 'include "/var/www/html/config/config.php"; echo $CONFIG["dbpassword"];')"
+sudo docker run -d --name nextcloud-mariadb --network dpv --network-alias db \
+  -v /data/apps/nextcloud-mariadb:/var/lib/mysql \
+  -e MARIADB_RANDOM_ROOT_PASSWORD=1 -e MARIADB_DATABASE=nextcloud \
+  -e MARIADB_USER=nextcloud -e MARIADB_PASSWORD="$DBPW" \
+  mariadb:10.6 --transaction-isolation=READ-COMMITTED --binlog-format=ROW
+```
+
+Dann der Dump, von Lightsail aus (dieselbe Sitzung mit Agent-Forwarding):
+
+```
+sudo docker exec nextcloud_db sh -c 'mysqldump --single-transaction --default-character-set=utf8mb4 \
+  -unextcloud -p"$MYSQL_PASSWORD" nextcloud' | gzip \
+  | ssh $VM 'gunzip | sudo docker exec -i nextcloud-mariadb sh -c "mariadb -unextcloud -p\"\$MARIADB_PASSWORD\" nextcloud"'
+```
+
+**4 — Starten, noch auf MariaDB, und zur Testkopie machen.** Auf der VM
+`sudo systemctl restart dpv-compose.service` — jetzt findet `fetch-secrets.sh` die
+`config.php` und nimmt Nextcloud dazu. Sofort danach, in `/opt/dpv/compose` mit
+`O="sudo docker compose exec -T --user www-data nextcloud php occ"`:
+
+```
+$O config:system:set mail_smtpmode --value=null          # keine Mails an echte Nutzer
+$O config:app:set dav sendEventReminders --value=no      # doppelt hält besser
+$O config:system:set trusted_domains 0 --value=cloud.scout-tools.de
+$O config:system:set overwritehost --value=cloud.scout-tools.de
+$O config:system:set overwrite.cli.url --value=https://cloud.scout-tools.de
+$O config:system:set oidc_login_client_id --value=nextcloud-test
+$O config:system:set oidc_login_client_secret --value='<Secret aus der Vorbereitung>'
+$O config:system:set oidc_login_logout_url --value=https://cloud.scout-tools.de/apps/oidc_login/oidc
+$O config:system:set maintenance_window_start --value=1 --type=integer
+$O status
+```
+
+Kurz prüfen, dass die Kopie **vor** der Konvertierung läuft: SSO-Login, ein
+Gruppenordner, eine Datei öffnen. Sonst weiß man hinterher nicht, woran es liegt.
+
+**5 — Konvertieren.** Zuerst **mit** Forms versuchen — Forms ist inzwischen 5.4, der
+alte Fehler kann behoben sein, und in der Kopie kostet ein Fehlversuch nichts. Scheitert
+es an Forms-Tabellen: `$O app:remove forms`, dann noch einmal. `--clear-schema` leert
+die Zieldatenbank vorher, der Schritt ist also wiederholbar.
+
+```
+PGPW="$(sudo grep ^POSTGRES_NEXTCLOUD_PASSWORD= /opt/dpv/compose/.env | cut -d= -f2)"
+$O maintenance:mode --on
+$O db:convert-type --all-apps --clear-schema --password="$PGPW" pgsql nextcloud postgres nextcloud
+$O maintenance:mode --off
+$O db:add-missing-indices
+$O maintenance:repair --include-expensive     # MIME-Typ-Migrationen, auf Lightsail zu teuer
+$O config:system:get dbtype                   # pgsql
+```
+
+Danach Zeilenzahlen stichprobenartig vergleichen (`oc_filecache`, `oc_share`,
+`oc_users`, `oc_group_folders`) — MariaDB läuft ja noch daneben.
+
+**6 — Collabora.**
+
+```
+$O config:app:set richdocuments wopi_url --value=https://office.scout-tools.de
+$O config:app:set richdocuments public_wopi_url --value=https://office.scout-tools.de
+$O richdocuments:activate-config
+```
+
+Auf Lightsail stand `wopi_url` ohne `https://` und zeigte auf einen Namen, der zu AKS
+führte — Collabora hat dort nie funktioniert.
+
+**7 — Aufräumen**, erst wenn die Verifikation durch ist:
+`sudo docker rm -f nextcloud-mariadb && sudo rm -rf /data/apps/nextcloud-mariadb`,
+dann `sudo /opt/dpv/scripts/pgbackrest-full-backup.sh`.
+
+**Probe `user_oidc`** (optional, in der Kopie kostenlos). Die offizielle App kann
+Backchannel-Logout, Bearer-Tokens und den Login-Flow der Clients sauber. Damit die
+bestehenden Konten bleiben, ohne Hash als ID und mit `soft_auto_provision` (Standard):
+`user_oidc:provider` mit `--unique-uid=0`, `--mapping-uid=preferred_username`,
+Gruppen aus `roles`, Kontingent aus `nextcloudquota`, dann `oidc_login` deaktivieren.
+Zu prüfen: dieselben Konten mit denselben Dateien und Freigaben, **dieselben Gruppen**
+(nicht doppelt angelegt — daran hängen die Gruppenordner) und der Login der Desktop-
+und Mobil-Clients. Bekanntes Fehlerbild heute: Nach dem Keycloak-Login landet der
+Client auf der Nextcloud-Passwortmaske. Beim Test die URL dieser Seite notieren.
 
 ### Verifikation
 
-Dateizugriff und Upload, Sharing-Links, Kalender und Kontakte, SSO-Login,
-Collabora-Dokumentbearbeitung, Desktop-Client-Sync gegen einen Testaccount.
+- SSO-Login von einem Gerät ohne Session, Logout.
+- Gruppenordner (20), persönliche Dateien, Upload einer großen Datei (> 1 GB),
+  Freigabelinks, Papierkorb und Versionen.
+- Kalender und Kontakte, auch per CalDAV/CardDAV über `/.well-known/…`.
+- Collabora: Dokument öffnen, gleichzeitig zu zweit bearbeiten, speichern.
+- Desktop-Client-Sync gegen einen Testaccount, Mobil-App.
+- `$O setupchecks` ohne neue Fehler, Nextcloud-Log ohne `level ≥ 3`.
+- Kopie per IPv4 und IPv6 (`curl -4`/`-6 https://cloud.scout-tools.de/status.php`).
 
 ### Rollback
 
-Container stoppen, Lightsail läuft unverändert weiter.
+`nextcloud` und `collabora` stoppen. Lightsail läuft unverändert weiter; die Kopie
+hat dort nichts verändert.
 
 ---
 
 ## Phase 4 — Cutover B: Nextcloud live
 
-**Ziel:** `cloud.` und `office.dpvonline.de` zeigen auf die neue VM. **Wartungsfenster,
-Nutzer betroffen.**
+**Ziel:** `cloud.` und `office.dpvonline.de` laufen auf der VM. **Wartungsfenster,
+Nutzer betroffen.** Der Ablauf ist der aus Phase 3, nur mit Delta-`rsync`; Dauer
+abhängig davon, wie lange der letzte Delta-Lauf braucht — den Tag vorher einmal
+laufen lassen und die Zeit messen.
+
+### Vorbereitung
+
+- **Mindestens einen Tag vorher bei IONOS** die TTL von `cloud.` und `office.dpvonline.de`
+  (A und AAAA) auf 300 setzen (Lehre aus Cutover A). Alte Werte für den Rollback
+  notieren: `cloud` A `3.65.3.213`, AAAA `2a05:d014:77e:a000:175b:8a8f:6acc:5b38`;
+  `office` A `72.144.24.168` (AKS, antwortet nicht).
+- Am Vortag Delta-`rsync` wie in Phase 3, Schritt 2 — dann bleibt im Fenster wenig.
+- Cutover-PR vorbereiten, nicht mergen, falls sich aus Phase 3 Änderungen ergeben.
+- Fenster ankündigen, inklusive: Desktop-Clients pausieren nicht von selbst, sie
+  synchronisieren nach dem Fenster weiter.
 
 ### Schritte
 
-1. TTLs vorher herunterdrehen, Fenster ankündigen.
-2. Nextcloud auf Lightsail in den `maintenance:mode` (Schreibstopp).
-3. Finaler `rsync`-Delta-Lauf — nur noch die Änderungen seit Phase 3, entsprechend kurz.
-4. Finaler DB-Dump aus Lightsail, Konvertierung nach dem in Phase 3 geprobten Ablauf.
-5. Caddy auf echtes Let's Encrypt umstellen.
-6. A/AAAA-Records für `cloud.` und `office.` umstellen.
-7. `occ files:scan --all` und `occ maintenance:mode --off`.
+| # | Schritt | Rollback |
+|---|---|---|
+| 1 | Lightsail: `occ maintenance:mode --on`, `/etc/cron.d/nextcloud-cron` wegschieben — **Schreibstopp** | Modus aus, Cron zurück |
+| 2 | Letzter `rsync` beider Verzeichnisse (Phase 3, Schritt 2) | wie 1 |
+| 3 | VM: `nextcloud` stoppen, MariaDB neu, frischer Dump (Phase 3, Schritt 3) | wie 1 |
+| 4 | Konvertieren (Phase 3, Schritt 5) | wie 1 |
+| 5 | `terraform.tfvars`: `DOMAIN_CLOUD = "cloud.dpvonline.de"`, `DOMAIN_OFFICE = "office.dpvonline.de"`, `apply` (nur zwei Secrets in-place) | wie 1 |
+| 6 | IONOS: A und AAAA von `cloud` und `office` auf die VM | DNS zurück, dann wie 1 |
+| 7 | VM: `systemctl restart dpv-compose.service` — jetzt mit `nextcloud-cron`; Collabora-URLs auf `https://office.dpvonline.de` (Phase 3, Schritt 6) | wie 6 |
+| 8 | Prüfen wie in Phase 3, mit echten Konten und einem laufenden Desktop-Client | wie 6 |
+| 9 | `occ maintenance:mode --off` auf der VM — **ab hier kein verlustfreies Zurück** | nur mit Datenverlust |
 
-### Verifikation
-
-Wie Phase 3, zusätzlich mit echten Nutzeraccounts und einem laufenden Desktop-Client.
-
-### Rollback
-
-DNS zurück, Lightsail aus dem Maintenance-Mode holen.
+Anders als in Phase 3: Die in Schritt 2 kopierte `config.php` bringt die
+Produktionswerte mit — Hostnamen, `oidc_login`-Client, Mailserver — und
+`maintenance => true`. Deshalb in Schritt 4 **keine** Anpassungen aus Phase 3, Schritt 4,
+und erst in Schritt 9 den Wartungsmodus lösen. `files:scan` ist nicht nötig: Dateien
+und Datenbank stammen beide aus dem eingefrorenen Stand.
 
 ### Danach
 
-Nach einer unauffälligen Woche: **Lightsail abschalten.**
+- Lightsail **im Wartungsmodus** weiterlaufen lassen, bis alles durchgetestet ist. So
+  bleibt es Rollback-Ziel, aber Clients mit altem DNS-Eintrag schreiben nicht mehr
+  dorthin.
+- `3.65.3.213/32` aus `ADMIN_IP_CIDRS` entfernen, `terraform apply`.
+- Keycloak-Client `nextcloud-test` löschen.
+- Beim Abschalten von Lightsail **auch beide EFS löschen** (Nutzerdaten und Backups,
+  zusammen >300 GB) — sie hängen nicht an der Instanz und kosten allein weiter.
 
 ---
 
@@ -684,10 +897,16 @@ Kein Zeitdruck, alles nach dem letzten Cutover.
 
 - **Keycloak-Client-Secrets rotieren** — jetzt sicher, weil beide Seiten auf derselben
   VM liegen.
-- **Forms-App neu installieren** (ohne die alten Daten).
-- **Nextcloud stufenweise hochziehen** — nur ein Major-Sprung pro Schritt.
-- **`terraform/dns.tf` aufräumen** — der `auth`-Record in `scout-tools.de` wird nicht
-  mehr gebraucht. Damit fällt die letzte Abhängigkeit zum alten Repo weg und
+- **Forms-App neu installieren** (ohne die alten Daten) — nur falls sie in Phase 3
+  für die Konvertierung entfernt werden musste.
+- **Nextcloud weiter hochziehen**, 33 → 34 → 35, ein Major pro Schritt; vorher prüfen,
+  ob alle Apps die neue Version unterstützen (Stand 24.09.: ja, für beide). Auf der VM
+  ist das ein Renovate-PR plus Pre-Update-Backup, statt Handarbeit auf Lightsail.
+- **Auf `user_oidc` umstellen**, falls die Probe in Phase 3 gut ausgeht.
+- **`notify_push`** (Client-Push): entlastet den Server bei vielen Desktop-Clients,
+  die sonst regelmäßig nach Änderungen fragen. Optional das Talk-Hochleistungs-Backend.
+- **`terraform/dns.tf` aufräumen** — die Records `auth`, `wiki`, `cloud` und `office`
+  in `scout-tools.de` werden nicht mehr gebraucht. Damit fällt die letzte Abhängigkeit zum alten Repo weg und
   `azure-docker` steht vollständig auf eigenen Füßen.
 - **Altes Repo aufräumen** — migrierte Ressourcen aus `azure-infrastructure` entfernen.
 - **Optional:** `imaginary` als eigener Container für Bildvorschauen; Nextcloud Primary
@@ -699,16 +918,14 @@ Kein Zeitdruck, alles nach dem letzten Cutover.
 
 ## Offene Fragen
 
-Diese Punkte blockieren nichts vor Phase 1, müssen aber vor der jeweiligen Phase
-geklärt sein:
+Die Fragen aus der Planung sind beantwortet (Versionen, Größen, SMB: siehe Phase 1 und
+Phase 3). Offen bleibt:
 
 | Frage | Gebraucht für | Wie herausfinden |
 |---|---|---|
-| Welche Confluence-Version läuft auf AKS? | Phase 1 | `kubectl -n wiki get deploy -o yaml \| grep image:` |
-| Welche Nextcloud- und MariaDB-Version auf Lightsail? | Phase 3 | `occ status`, `mysql --version` |
-| Tatsächliche Größe des Nextcloud-Datenverzeichnisses? | Phase 0 (Plattengröße) | `du -sh` auf Lightsail |
-| Wird SMB-External-Storage genutzt? | Phase 3 (Dockerfile) | `occ files_external:list` |
-| Wie groß sind die DBs im AKS-Postgres? | Phase 0 (Plattengröße) | `psql -c '\l+'` |
+| Ersetzt `user_oidc` das bisherige `oidc_login`? | Phase 4 oder 5 | Probe in Phase 3 |
+| Warum landet der Desktop-Client nach dem Keycloak-Login auf der Passwortmaske? | Phase 3 | URL der Seite beim Auftreten notieren |
+| Geht `db:convert-type` mit Forms 5.4 durch? | Phase 3 | erster Versuch ohne `app:remove forms` |
 
 ## Kostenüberblick
 

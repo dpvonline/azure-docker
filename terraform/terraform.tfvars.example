@@ -17,6 +17,8 @@ BACKUP_STORAGE_ACCOUNT_NAME = "dpvbackups01"      # global eindeutig, nur a-z0-9
 
 DOMAIN_AUTH       = "auth.scout-tools.de" # zum Testen; für den Live-Cutover später auf eine dpvonline.de-Subdomain umstellen
 DOMAIN_WIKI       = "wiki.scout-tools.de" # dito; beim Cutover A auf wiki.dpvonline.de
+DOMAIN_CLOUD      = "cloud.scout-tools.de"  # Nextcloud-Testkopie; beim Cutover B auf cloud.dpvonline.de
+DOMAIN_OFFICE     = "office.scout-tools.de" # Collabora; beim Cutover B auf office.dpvonline.de
 LETSENCRYPT_EMAIL = "cloudadmin@dpvonline.de"
 
 UBUNTU_PRO_TOKEN = "C1abcDEFghiJKLmnoPQRstuVWXyz123"  # von ubuntu.com/pro, kostenloses Personal-Abo

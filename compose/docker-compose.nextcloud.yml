@@ -1,0 +1,98 @@
+# Nextcloud + Collabora Online, moved over from AWS Lightsail (see MIGRATION.md,
+# Phase 3). Only part of COMPOSE_FILE once /data/apps/nextcloud holds a copied
+# installation — fetch-secrets.sh checks for config/config.php. Started on an
+# empty directory, the image would present the public setup wizard instead.
+
+services:
+  nextcloud:
+    # The plain upstream image, exactly as on Lightsail — the custom Dockerfile in
+    # nextcloud-config was not in use there. Pinned so the move is not also a
+    # version jump; on a patch bump the image's entrypoint runs `occ upgrade`
+    # by itself. Majors stay manual (renovate.json): one major per step, and
+    # every installed app has to support the new one first.
+    image: nextcloud:33.0.9-apache
+    restart: unless-stopped
+    depends_on:
+      - postgres
+      - redis
+    networks:
+      - dpv
+    environment:
+      # Read by config/redis.config.php, which ships with the image.
+      REDIS_HOST: redis
+      # Caddy terminates TLS. The whole Docker range is trusted rather than one
+      # address because Caddy's address in the "dpv" network is not fixed; only
+      # Caddy publishes ports, so nothing else can reach Nextcloud from outside.
+      TRUSTED_PROXIES: "172.16.0.0/12 fd00::/8"
+      OVERWRITEPROTOCOL: https
+      PHP_MEMORY_LIMIT: 1G
+      PHP_UPLOAD_LIMIT: 16G
+      APACHE_BODY_LIMIT: "0"
+    volumes:
+      # Application, config/, custom_apps/ — on the fast apps disk.
+      - /data/apps/nextcloud:/var/www/html
+      # User files — the path stays /var/www/html/data inside the container, so
+      # `datadirectory` in config.php does not change with the move.
+      - /data/nextcloud:/var/www/html/data
+    # Port 80 is intentionally not published — Caddy reaches it over "dpv".
+
+  # Background jobs (trash and version expiry, file scans, calendar reminders,
+  # notification mails). Deliberately behind a profile: fetch-secrets.sh only
+  # enables it once DOMAIN_CLOUD is the production name. The test copy runs on
+  # real data, and its reminders and notifications would otherwise reach real
+  # users — the Nextcloud counterpart of Confluence's mail lock in Phase 1.
+  nextcloud-cron:
+    image: nextcloud:33.0.9-apache
+    restart: unless-stopped
+    profiles: ["nextcloud-live"]
+    depends_on:
+      - nextcloud
+    networks:
+      - dpv
+    entrypoint: /cron.sh
+    environment:
+      REDIS_HOST: redis
+      PHP_MEMORY_LIMIT: 1G
+    volumes:
+      - /data/apps/nextcloud:/var/www/html
+      - /data/nextcloud:/var/www/html/data
+
+  redis:
+    # Cache and file locking only — nothing in it has to survive a restart, so
+    # no persistence and no volume.
+    image: redis:8.10-alpine
+    restart: unless-stopped
+    command: ["redis-server", "--save", "", "--appendonly", "no"]
+    networks:
+      - dpv
+
+  collabora:
+    # Set up fresh — the container on Lightsail was never reachable (its DNS
+    # name pointed at AKS), and Collabora keeps no data of its own.
+    image: collabora/code:26.04.4.2.1
+    restart: unless-stopped
+    networks:
+      - dpv
+    cap_add:
+      - MKNOD
+    environment:
+      # The only Nextcloud allowed to open documents here.
+      aliasgroup1: "https://${DOMAIN_CLOUD}:443"
+      server_name: ${DOMAIN_OFFICE}
+      # Caddy terminates TLS.
+      extra_params: "--o:ssl.enable=false --o:ssl.termination=true"
+      dictionaries: "de_DE en_GB en_US"
+      username: admin
+      password: ${COLLABORA_ADMIN_PASSWORD}
+    # Port 9980 is intentionally not published — Caddy reaches it over "dpv".
+
+  caddy:
+    networks:
+      dpv:
+        # Nextcloud fetches Collabora's discovery, and Collabora calls back into
+        # Nextcloud (WOPI), both under their public names. These aliases resolve
+        # those names to Caddy inside the Docker network, so the traffic never
+        # leaves the VM — and the certificate still matches.
+        aliases:
+          - ${DOMAIN_CLOUD}
+          - ${DOMAIN_OFFICE}

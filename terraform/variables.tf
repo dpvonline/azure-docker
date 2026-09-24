@@ -88,6 +88,16 @@ variable "DOMAIN_WIKI" {
   description = "Hostname Confluence will be reachable under — used by Caddy and as Confluence's proxy name. Same pattern as DOMAIN_AUTH: a scout-tools.de subdomain for testing (dns.tf manages the 'wiki' record there), wiki.dpvonline.de at the production cutover."
 }
 
+variable "DOMAIN_CLOUD" {
+  type        = string
+  description = "Hostname Nextcloud will be reachable under. cloud.scout-tools.de for the test copy (dns.tf manages the 'cloud' record there), cloud.dpvonline.de at Cutover B. Switching to cloud.dpvonline.de also turns on Nextcloud's background jobs (see fetch-secrets.sh)."
+}
+
+variable "DOMAIN_OFFICE" {
+  type        = string
+  description = "Hostname Collabora Online will be reachable under. Same pattern as DOMAIN_CLOUD: office.scout-tools.de for testing, office.dpvonline.de at Cutover B."
+}
+
 variable "LETSENCRYPT_EMAIL" {
   type        = string
   description = "Contact address Caddy hands to Let's Encrypt"
