@@ -76,7 +76,7 @@ runcmd:
   # Deliberately NOT under /mnt: on VM sizes that have a temporary disk, the
   # Azure agent mounts that ephemeral volume at /mnt, which makes it a
   # well-known way to lose persistent data placed underneath it.
-  # Standard_B4as_v2 has no temp disk at all, and /data additionally matches
+  # Standard_D4ps_v6 has no temp disk at all, and /data additionally matches
   # the layout the nextcloud-config repo already uses.
   - |
     mount_lun() {

@@ -76,18 +76,26 @@ resource "azurerm_backup_policy_vm" "daily" {
   }
 }
 
-# NOTE: the VM is replaced whenever custom_data changes (cloud-init edits), and
-# protection is briefly interrupted while that happens. Azure resource IDs are
-# path-based, so the rebuilt VM keeps the same ID and the same name — existing
-# recovery points are retained rather than orphaned.
+# source_vm_id is spelled out rather than taken from
+# azurerm_linux_virtual_machine.app.id, deliberately. Both give the same
+# string — Azure resource IDs are path-based, so a rebuilt VM keeps its ID —
+# but on a rebuild Terraform only knows the new VM's ID after apply, and a
+# changing source_vm_id forces replacing this item. Replacing it means
+# stopping protection *and deleting the backup data*, after which the
+# soft-deleted item (14 days) blocks protecting the rebuilt VM under the same
+# name. With the fixed string the item is left alone: the next backup runs
+# against the new VM behind the same ID, and the old recovery points stay
+# restorable. MIGRATION.md ("Umzug auf ARM64") checks this with an on-demand
+# backup right after the rebuild.
 resource "azurerm_backup_protected_vm" "app" {
   resource_group_name = azurerm_resource_group.core.name
   recovery_vault_name = azurerm_recovery_services_vault.core.name
-  source_vm_id        = azurerm_linux_virtual_machine.app.id
+  source_vm_id        = "${azurerm_resource_group.core.id}/providers/Microsoft.Compute/virtualMachines/${local.vm_name}"
   backup_policy_id    = azurerm_backup_policy_vm.daily.id
 
   # Without this the first backup can race the disk attachments and protect an
-  # incomplete VM.
+  # incomplete VM. The attachments depend on the VM, so this also keeps the VM
+  # ahead of this item now that source_vm_id no longer implies it.
   depends_on = [
     azurerm_virtual_machine_data_disk_attachment.postgres_data,
     azurerm_virtual_machine_data_disk_attachment.apps_data,

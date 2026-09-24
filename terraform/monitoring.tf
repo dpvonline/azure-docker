@@ -5,10 +5,12 @@
 #     down — but a full Postgres disk still does, and a full Nextcloud disk
 #     means failed uploads. Azure cannot see inside the guest filesystem, so
 #     this needs the Azure Monitor Agent reporting a performance counter.
-#  2. Exhausted CPU credits. The B-series throttles to its baseline once the
-#     burst credits run out; sustained load from Confluence's JVM plus PHP and
-#     Collabora is exactly the profile that can get there. This one is a
-#     platform metric and needs no agent.
+#  2. Exhausted CPU credits — only on a burstable B-series VM_SIZE. The
+#     B-series throttles to its baseline once the burst credits run out;
+#     sustained load from Confluence's JVM plus PHP and Collabora is exactly
+#     the profile that can get there. This one is a platform metric and needs
+#     no agent. Standard_D4ps_v6 has dedicated cores, so there it is not
+#     created at all.
 
 resource "azurerm_monitor_action_group" "ops" {
   name                = "ag-dpv-ops"
@@ -24,14 +26,15 @@ resource "azurerm_monitor_action_group" "ops" {
 
 # --- CPU credits (platform metric, no agent) ---------------------------------
 
-# Only B-series VMs emit this metric. If VM_SIZE is ever switched to a
-# non-burstable size (e.g. Standard_D4as_v5) this alert simply stops receiving
-# data — harmless, but delete it then so it isn't mistaken for working cover.
+# Only B-series VMs emit this metric. On any other size the alert would never
+# receive data and look like working cover without being any, hence the count.
 resource "azurerm_monitor_metric_alert" "cpu_credits" {
+  count = startswith(lower(var.VM_SIZE), "standard_b") ? 1 : 0
+
   name                = "alert-dpv-cpu-credits"
   resource_group_name = azurerm_resource_group.core.name
   scopes              = [azurerm_linux_virtual_machine.app.id]
-  description         = "B-series burst credits running low — sustained load is being throttled to baseline. Consider Standard_D4as_v5."
+  description         = "B-series burst credits running low — sustained load is being throttled to baseline. Consider a size with dedicated cores (e.g. Standard_D4ps_v6)."
   severity            = 2
   frequency           = "PT15M"
   window_size         = "PT1H"
@@ -48,6 +51,12 @@ resource "azurerm_monitor_metric_alert" "cpu_credits" {
   action {
     action_group_id = azurerm_monitor_action_group.ops.id
   }
+}
+
+# Was a single resource before the count above.
+moved {
+  from = azurerm_monitor_metric_alert.cpu_credits
+  to   = azurerm_monitor_metric_alert.cpu_credits[0]
 }
 
 # --- Disk fill level (needs the guest agent) ---------------------------------

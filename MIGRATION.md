@@ -22,7 +22,8 @@ Compose-Dateien, keine Neuinstallation.
 
 ## Zielbild
 
-Eine VM (`Standard_B4s_v2`), ein Postgres, ein Reverse Proxy (Caddy), drei Platten:
+Eine VM (`Standard_D4ps_v6`, ARM64, bis zum Umzug unten `Standard_B4s_v2`), ein
+Postgres, ein Reverse Proxy (Caddy), drei Platten:
 
 | Platte | Typ | Größe | Mount | Inhalt |
 |---|---|---|---|---|
@@ -109,6 +110,8 @@ jede weitere App manuelles DDL per `psql`.
    Family vCPUs" steht auf 3, gebraucht werden 4 (Bsv2 dagegen auf 65). Falls die Quota
    je erhöht wird, ist der Wechsel eine Zeile in `tfvars` plus Neustart — `VM_SIZE`
    steckt nicht in `custom_data`, es braucht also keinen VM-Neuaufbau.
+   *Abgelöst durch `Standard_D4ps_v6`, siehe „Umzug auf ARM64" nach Phase 2. Mehr
+   Basv2-Quota gibt Microsoft in der Region nicht her.*
 
 6. **Platten 2 und 3 anlegen** plus Mount-Logik in `cloud-init.yaml.tftpl`. Erst mit
    6.400 IOPS lohnt die Aufteilung: 3.000 + 3.000 + 500 Baseline gegen 6.400 VM-Limit.
@@ -389,6 +392,215 @@ sie, oder sie müssten zurückmigriert werden. Deshalb Schritt 10 gründlich.
 
 ---
 
+## Zwischenschritt — Umzug auf ARM64 (`Standard_D4ps_v6`)
+
+**Ziel:** Die VM läuft auf `Standard_D4ps_v6` statt `Standard_B4s_v2`. Das spart
+~15 €/Monat, und die Kerne gehören der VM allein, statt über Burst-Credits zu drosseln.
+**Wartungsfenster, Nutzer betroffen:** Keycloak und Wiki sind 30–45 Minuten weg.
+1,5 Stunden ankündigen. Vor Phase 3, solange noch wenig Daten auf der VM liegen.
+
+**Warum ein Neuaufbau:** Zwischen x86 und ARM64 gibt es kein Resize. Das Ubuntu-Image
+ist je Architektur ein anderes, und ein anderes Image baut die VM neu. Die drei
+Datenplatten sind eigene Ressourcen und bleiben, wie sie sind. Auch der
+Azure-Backup-Eintrag bleibt stehen: `source_vm_id` ist in `terraform/backup.tf` als
+fester Pfad geschrieben, sodass Terraform ihn nicht mit ersetzt und dabei die
+Sicherungen löscht. Neu entstehen die OS-Platte, die Host-Keys, die Managed Identity
+samt ihren zwei Rollenzuweisungen, der Monitoring-Agent und die
+Let's-Encrypt-Zertifikate (Caddys Volume liegt auf der OS-Platte).
+
+**Warum Postgres einfach weiterläuft:** Das Datenverzeichnis wird nicht migriert,
+Postgres 18 auf ARM64 startet direkt darauf. x86-64 und ARM64 haben dasselbe
+Byte-Layout (Little Endian, 64 Bit, gleiche Ausrichtung); Postgres prüft das beim Start
+gegen `pg_control` und verweigert den Start, wenn es nicht passt, bricht also laut
+statt leise. Der einzige bekannte Unterschied, das Vorzeichen von `char`, ist seit
+Postgres 18 in `pg_control` festgehalten und wird berücksichtigt. glibc und damit
+die Sortierung sind in `postgres:18` auf beiden Architekturen dieselben. Geprüft wird
+es trotzdem, mit `amcheck` über alle Indizes; Dumps liegen als Rückfall bereit.
+
+Getestet am 24.09.: In Zone 1 ist Hardware für `D4ps_v6` frei, auch mit Premium SSD v2
+als Datenplatte. Eine Garantie für den Tag des Umzugs ist das nicht (siehe Rollback A).
+
+### Wer merkt was
+
+| Zeitraum | Wiki | Anmeldung (Keycloak) | Nextcloud auf Lightsail |
+|---|---|---|---|
+| Schritt 2 bis 7 | weg | **weg** | bestehende Sessions laufen, **neue Logins scheitern** |
+| ab Schritt 8 | normal | normal | normal |
+
+### Vorbereitung
+
+- PR „VM auf Standard_D4ps_v6 (ARM64)" mergen. Solange in `terraform.tfvars`
+  `VM_SIZE = "Standard_B4s_v2"` steht, ändert ein `terraform apply` danach nur die
+  Beschreibung des CPU-Credit-Alerts. Der Umzug beginnt erst mit Schritt 3.
+- Fenster ankündigen, inklusive der Nextcloud-Logins. **Nicht** zwischen 01:00 und
+  04:30 UTC (Azure Backup, pgBackRest, Sonntags-Update, Confluence-Prune).
+- Eigene IP in `ADMIN_IP_CIDRS`, SSH auf die VM geht.
+
+### Schritte
+
+| # | Schritt | Dauer | Rollback |
+|---|---|---|---|
+| 1 | Sicherung: Zahlen notieren, Dumps, Full-Backup | 5 Min. | – |
+| 2 | Stack sauber stoppen, `pg_control` notieren — **Ausfall beginnt** | 2 Min. | `docker compose up -d` |
+| 3 | `VM_SIZE` umstellen, `terraform apply` | 5–10 Min. | **A** |
+| 4 | Host-Key prüfen, cloud-init abwarten | 10–15 Min. | A |
+| 5 | Postgres prüfen | 5 Min. | **B** |
+| 6 | pgBackRest prüfen, Full-Backup | 5 Min. | |
+| 7 | Keycloak und Wiki prüfen | 10 Min. | A |
+| 8 | Freigeben, Azure Backup und Monitoring prüfen | 15 Min. | wie A, auch danach |
+
+**1 — Sicherung.** Auf der VM:
+
+```
+cd /opt/dpv/compose
+sudo /opt/dpv/scripts/pgbackrest-full-backup.sh
+sudo install -d -m 700 /data/apps/pre-arm64
+for db in keycloak confluence; do
+  sudo docker compose exec -T --user postgres postgres pg_dump -Fc $db \
+    | sudo tee /data/apps/pre-arm64/$db.dump >/dev/null
+done
+sudo ls -la /data/apps/pre-arm64
+sudo docker compose exec --user postgres postgres psql -d confluence -Atc \
+  "select (select count(*) from content), (select count(*) from bodycontent)"
+sudo docker compose exec --user postgres postgres psql -d keycloak -Atc \
+  "select count(*) from user_entity"
+```
+
+Die drei Zahlen notieren. Die Dumps liegen auf der Apps-Platte, die den Neuaufbau
+übersteht, und nur `root` kann sie lesen. Sie enthalten Passwort-Hashes, also nicht vom
+Server herunterkopieren.
+
+**2 — Stoppen.** Sauber herunterfahren, damit Postgres auf ARM64 ohne WAL-Replay startet:
+
+```
+sudo docker compose stop
+sudo docker compose run --rm --no-deps --user postgres --entrypoint pg_controldata \
+  postgres /var/lib/postgresql/data/pgdata | grep -iE "system identifier|cluster state|signedness"
+```
+
+`Database cluster state` muss `shut down` sein. Die Systemkennung notieren.
+
+**3 — Neuaufbau.** Lokal in `terraform/terraform.tfvars`
+`VM_SIZE = "Standard_D4ps_v6"`, dann `terraform plan`. Erwartet: **8 to add, 0 to
+change, 9 to destroy**. Ersetzt werden die VM (`sku "server" -> "server-arm64"`),
+die drei Plattenanbindungen, der Monitoring-Agent mit seiner DCR-Zuordnung und die zwei
+Rollenzuweisungen. Gelöscht wird der CPU-Credit-Alert. **Nicht** im Plan dürfen stehen:
+`azurerm_managed_disk.*`, `azurerm_backup_protected_vm.app`, irgendetwas aus Key Vault.
+Passt das, `terraform apply`.
+
+**4 — Host-Key und cloud-init.** Die VM hat neue Host-Keys. Fingerabdruck über Azure
+holen, nicht blind annehmen:
+
+```
+az vm run-command invoke -g rg-dpv-core -n vm-dpv-core --command-id RunShellScript \
+  --scripts "ssh-keygen -lf /etc/ssh/ssh_host_ed25519_key.pub" --query "value[0].message" -o tsv
+ssh-keygen -R 4.182.232.115
+ssh -i ~/.ssh/dpv_core_vm_ed25519 dpvadmin@4.182.232.115   # Fingerabdruck vergleichen
+```
+
+Auf der VM:
+
+```
+cloud-init status --wait --long
+sudo cat /var/log/dpv-boot-warnings.log
+uname -m                                             # aarch64
+findmnt /data/postgres /data/apps /data/nextcloud
+```
+
+Scheitert cloud-init am Key Vault (`Forbidden` in `/var/log/cloud-init-output.log`),
+war die neue Rollenzuweisung noch nicht wirksam: fünf Minuten warten, dann
+`sudo cloud-init clean --logs --reboot`. Die Platten sind dabei sicher, `mkfs` läuft nur
+auf Platten ohne Dateisystem.
+
+**5 — Postgres.**
+
+```
+cd /opt/dpv/compose
+sudo docker compose ps
+sudo docker compose logs postgres | grep -iE "error|fatal|panic"
+sudo docker compose exec --user postgres postgres pg_controldata /var/lib/postgresql/data/pgdata \
+  | grep -iE "system identifier|signedness"
+for db in keycloak confluence; do
+  sudo docker compose exec -T --user postgres postgres psql -d $db -v ON_ERROR_STOP=1 -At \
+    -c "create extension if not exists amcheck" \
+    -c "select count(*) from (select bt_index_check(c.oid, true) from pg_index i
+          join pg_class c on c.oid = i.indexrelid join pg_am am on am.oid = c.relam
+          where am.amname = 'btree' and c.relpersistence <> 't' and i.indisvalid) s" \
+    -c "drop extension amcheck" </dev/null && echo "$db ok"
+done
+sudo docker compose exec --user postgres postgres psql -Atc \
+  "select datname, datcollversion = pg_database_collation_actual_version(oid) from pg_database where datallowconn"
+```
+
+Erwartet: dieselbe Systemkennung wie in Schritt 2, `keycloak ok` und `confluence ok`,
+überall `t`. Dann die drei Zahlen aus Schritt 1 wiederholen, sie müssen gleich sein.
+
+**6 — pgBackRest.** Die VM hat eine neue Identität und damit eine neue
+Rollenzuweisung auf den Blob-Speicher; die braucht ein paar Minuten, bis sie wirkt.
+Schlägt `check` fehl, kurz warten und wiederholen. Nicht einfach weiterlaufen lassen:
+ohne Archivierung sammelt sich WAL auf der Postgres-Platte.
+
+```
+sudo docker compose exec --user postgres postgres pgbackrest --stanza=main --config=/etc/pgbackrest/pgbackrest.conf stanza-create
+sudo docker compose exec --user postgres postgres pgbackrest --stanza=main --config=/etc/pgbackrest/pgbackrest.conf check
+sudo /opt/dpv/scripts/pgbackrest-full-backup.sh
+```
+
+`stanza-create` meldet, dass die Stanza schon existiert und gültig ist. Das ist
+richtig so: Systemkennung und Repository sind dieselben wie vorher.
+
+**7 — Keycloak und Wiki.** Wie in Cutover A, Schritt 10: SAML-Descriptor und
+`wiki.dpvonline.de/status` über IPv4 **und** IPv6 (`curl -4`/`curl -6`), Zertifikate
+von Let's Encrypt (Caddy holt sie beim Start neu), Login ins Wiki, eine Seite mit
+Anhang öffnen, Suche, Anmeldung bei Nextcloud, Confluence-Log auf `ERROR` prüfen.
+
+**8 — Freigeben und Nacharbeiten.** Wartungsende ankündigen. Danach, ohne Zeitdruck:
+
+- Azure Backup gegen die neue VM, mit dem bestehenden Eintrag:
+  ```
+  az backup protection backup-now -g rg-dpv-core -v rsv-dpv-core \
+    --backup-management-type AzureIaasVM -c vm-dpv-core -i vm-dpv-core
+  az backup job list -g rg-dpv-core -v rsv-dpv-core \
+    --query "[0].{op:properties.operation,status:properties.status}" -o table
+  ```
+  Der Job muss durchlaufen, und die alten Wiederherstellungspunkte müssen weiter in
+  der Liste stehen (`az backup recoverypoint list …`). Scheitert der Job mit einem
+  Fehler zur VM: **nichts löschen**, Fehlermeldung sichern. Der nächste Versuch wäre
+  `az backup protection disable … --delete-backup-data false`, dann
+  `az backup protection resume … --policy-name policy-dpv-daily`. Die Daten bleiben dabei
+  erhalten.
+- Monitoring: nach ~15 Minuten kommen im Workspace `log-dpv-core` wieder Zeilen an:
+  `Perf | where TimeGenerated > ago(30m) | summarize by Computer, InstanceName`.
+- `pro status`: ESM ist aktiv; ob Livepatch auf ARM64 aktiv ist, notieren. Ist es das
+  nicht, spielt `unattended-upgrades` Kernel-Updates trotzdem ein, sie greifen dann erst
+  nach einem Neustart.
+- `systemctl list-timers 'dpv-*'` zeigt beide Timer, `/etc/cron.d/pgbackrest-full`
+  existiert.
+- Nach einer unauffälligen Woche `/data/apps/pre-arm64` löschen.
+
+### Rollback
+
+**A — `apply` scheitert oder die VM kommt nicht sauber hoch.** Zum Beispiel keine
+Hardware (`AllocationFailed`, `ZonalAllocationFailed`, `SkuNotAvailable`). In
+`terraform.tfvars` wieder `VM_SIZE = "Standard_B4s_v2"`, `terraform apply`: Terraform
+baut die VM wieder mit x86-Image, Schritte 4–7 wie oben. Die Daten sind unverändert,
+Postgres wurde in Schritt 2 sauber gestoppt. Kontingent für `Bsv2` ist genug frei
+(61 vCPUs).
+
+**B — Postgres startet auf ARM64 nicht.** Dann hat es auch nichts geschrieben, also
+zurück wie A. Startet es, aber `amcheck` meldet einen defekten Index: nur diesen Index
+per `reindex index` neu bauen; bei mehreren `reindex database`. Beides geht bei den
+paar hundert MB in Sekunden. Rückfall hinter beidem sind die Dumps aus Schritt 1:
+Datenverzeichnis beiseite schieben, frisches Cluster, Dumps einspielen wie in Cutover A,
+Schritt 3, dann die pgBackRest-Stanza zurücksetzen (README, Abschnitt
+Postgres-18-Umstellung).
+
+**Nach Schritt 8** schreiben Nutzer auf der ARM64-VM. Ein Zurück auf x86 geht trotzdem
+jederzeit wie A, ohne Datenverlust: Das Datenverzeichnis ist in beide Richtungen
+dasselbe.
+
+---
+
 ## Phase 3 — Nextcloud aufbauen
 
 **Ziel:** Nextcloud läuft auf der neuen VM auf Postgres, mit einer Kopie der
@@ -500,14 +712,27 @@ geklärt sein:
 
 ## Kostenüberblick
 
-| | heute | danach |
-|---|---|---|
-| AKS-Cluster | entfällt | – |
-| Lightsail | entfällt | – |
-| VM `Standard_B4s_v2` | – | ~140 $/Mon |
-| Platten (32 + 64 GiB Premium v2, 256 GiB Standard SSD) | – | ~26 $/Mon |
-| Azure Backup | – | ~15–20 €/Mon |
-| Blob (pgBackRest) | – | wenige € |
+Gemessen an der Abrechnung für August 2026, dem ersten vollen Monat mit der VM (netto,
+EUR). Das Abo ist ein Sponsorship über 2.000 $ (~1.720 €) im Jahr; was darüber
+hinausgeht, wird mit Mehrwertsteuer berechnet. Das ergibt ein Budget von ~143 €/Monat.
 
-Listenpreise für Germany West Central. Beim Sponsorship-Abo gegen den tatsächlichen
-Credit-Verbrauch gegenrechnen.
+| Posten | `B4s_v2` (gemessen) | `D4ps_v6` | nach Phase 3 |
+|---|---:|---:|---:|
+| VM | 125,50 | ~110 | ~110 |
+| Premium SSD v2, 96 GiB (Basis-IOPS kostenlos) | 8,20 | 8,20 | 8,20 |
+| Standard SSD: Nextcloud 256 GiB + OS 48 GiB | 21,10 | 21,10 | 21,10 |
+| Plattenzugriffe | ~0,50 | ~0,50 | ~2 |
+| IPv4 (IPv6 ist kostenlos) | 3,30 | 3,30 | 3,30 |
+| Azure Backup: Gebühr für die VM, Speicher, Snapshots | 8,10 | 8,10 | ~20 |
+| Monitoring (Log Analytics im Freikontingent, 2 Log-Alerts) | ~1 | ~1 | ~1 |
+| Blob (pgBackRest), Key Vault, Traffic bis 100 GB | < 0,20 | < 0,20 | ~0,50 |
+| **Summe pro Monat** | **~168 €** | **~152 €** | **~166 €** |
+
+Unsicher ist nach Phase 3 vor allem der Traffic: Über 100 GB ausgehend im Monat kostet
+jedes GB ~0,075 €. Eine VM-Reservierung lohnt sich nicht, solange die Credits laufen:
+Credits können keine Reservierung bezahlen, die Reservierung ginge also samt
+Mehrwertsteuer auf die Karte.
+
+Bis zum Abriss kommt der AKS mit ~155 €/Monat dazu (Knoten, IP, Prometheus in `Infra`
+und der `MC_`-Gruppe). Nach dem Abriss bleiben dort die DNS-Zone `scout-tools.de`
+(~0,45 €) und eine Container Registry (~4,50 €), die mit Biber überflüssig ist.

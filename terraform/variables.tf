@@ -23,24 +23,26 @@ variable "ADMIN_IP_CIDRS" {
   description = "CIDR ranges allowed to reach port 22 (SSH). Keep this tight — e.g. your home/office IP with /32."
 }
 
-# Standard_B4s_v2: 4 vCPU, 16 GiB, 6400 disk IOPS / 145 MBps, no temp disk.
+# Standard_D4ps_v6: 4 vCPU (ARM64, Azure Cobalt 100), 16 GiB, 6400 disk IOPS /
+# ~200 MBps, dedicated (non-burstable) CPU, no temp disk.
 #
-# Deliberately the v2 B-series — the older B4ms caps at 2880 IOPS / 35 MBps,
-# i.e. below a single Premium v2 disk's baseline, and costs more.
+# Chosen on price: ~105 €/month list against ~120 € for the Intel
+# Standard_B4s_v2 it replaced, and dedicated cores instead of burst credits on
+# top. Every x86 size with 4 vCPU / 16 GiB in this region costs as much or
+# more, except the AMD Standard_B4as_v2 — which needs one more "Standard Basv2
+# Family vCPUs" than the quota of 3 allows, and Microsoft grants no more of it
+# here. Standard_B4ps_v2 (ARM64 as well, burstable) would be ~9 € cheaper
+# still. Capacity for both was verified in zone 1 on 2026-09-24.
 #
-# The AMD-based sibling Standard_B4as_v2 is functionally identical (every one
-# of the ~28 capabilities Azure reports matches, only the silicon differs) and
-# ~14 $/month cheaper, but this subscription's "Standard Basv2 Family vCPUs"
-# quota is 3 — one short of the 4 needed — while "Standard Bsv2 Family vCPUs"
-# sits at 65. Switching back is this one line plus a reboot (VM_SIZE is not
-# part of custom_data, so no VM rebuild) if that quota is ever raised.
+# The whole stack runs on ARM64: every image in compose/ is multi-arch.
 #
-# D4as_v5 has identical disk limits but dedicated (non-burstable) CPU for
-# ~12 $/month more than this; switch if the CPU-credit alert in monitoring.tf
-# keeps firing.
+# Switching between ARM64 and x86 sizes is NOT a resize: the OS image differs
+# per architecture (see local.vm_arm64 in vm.tf), so Terraform rebuilds the VM.
+# The data disks survive that. Switching within one architecture is an
+# in-place resize plus reboot. See MIGRATION.md before changing this.
 variable "VM_SIZE" {
   type    = string
-  default = "Standard_B4s_v2"
+  default = "Standard_D4ps_v6"
 }
 
 variable "POSTGRES_DISK_SIZE_GB" {
