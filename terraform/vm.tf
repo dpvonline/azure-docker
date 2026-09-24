@@ -4,10 +4,10 @@
 # included — so splitting Postgres and the application data gives roughly
 # double the usable IOPS at the same storage cost.
 #
-# That only pays off because the VM is a Standard_B4s_v2 (6400 IOPS /
-# 145 MBps). On the older B-series (B4ms: 2880 IOPS / 35 MBps) the VM caps
-# below a single disk's baseline and the split would buy nothing — see
-# MIGRATION.md before changing VM_SIZE.
+# That only pays off because the VM allows 6400 IOPS (Standard_D4ps_v6, as
+# did the Standard_B4s_v2 before it). On the older B-series (B4ms: 2880 IOPS /
+# 35 MBps) the VM caps below a single disk's baseline and the split would buy
+# nothing — see MIGRATION.md before changing VM_SIZE.
 
 resource "azurerm_managed_disk" "postgres_data" {
   name                 = "disk-dpv-postgres-data"
@@ -58,6 +58,15 @@ resource "azurerm_managed_disk" "nextcloud_data" {
 }
 
 locals {
+  vm_name = "vm-dpv-core"
+
+  # ARM64 sizes carry a "p" among the lower-case feature letters after the
+  # vCPU count (D4ps_v6, B4ps_v2, E4pds_v6 — Azure's naming convention), x86
+  # sizes never do. Derived instead of a separate variable so the image can
+  # never disagree with VM_SIZE: an x86 image on an ARM64 size (or vice versa)
+  # fails to boot, and changing the image rebuilds the VM.
+  vm_arm64 = can(regex("^Standard_[A-Z]+[0-9]+(-[0-9]+)?[a-z]*p[a-z]*_", var.VM_SIZE))
+
   pgbackrest_conf = templatefile("${path.module}/../scripts/pgbackrest.conf.tftpl", {
     backup_storage_account = azurerm_storage_account.backups.name
     backup_container       = azurerm_storage_container.pgbackrest.name
@@ -72,7 +81,7 @@ locals {
 }
 
 resource "azurerm_linux_virtual_machine" "app" {
-  name                  = "vm-dpv-core"
+  name                  = local.vm_name
   location              = azurerm_resource_group.core.location
   resource_group_name   = azurerm_resource_group.core.name
   size                  = var.VM_SIZE
@@ -97,7 +106,7 @@ resource "azurerm_linux_virtual_machine" "app" {
   source_image_reference {
     publisher = "Canonical"
     offer     = "ubuntu-24_04-lts"
-    sku       = "server"
+    sku       = local.vm_arm64 ? "server-arm64" : "server"
     version   = "latest"
   }
 
@@ -130,6 +139,8 @@ resource "azurerm_linux_virtual_machine" "app" {
   # NEXT deliberate rebuild picks them up. To apply a cloud-init change for
   # real, rebuild explicitly:
   #   terraform apply -replace=azurerm_linux_virtual_machine.app
+  # A rebuild is an outage of everything on this VM, so MIGRATION.md
+  # ("Umzug auf ARM64") has the runbook, including the Azure Backup side.
   lifecycle {
     ignore_changes = [custom_data]
   }

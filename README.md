@@ -21,23 +21,23 @@ Rollback) — siehe unten.
 
 ## Architektur
 
-- **1 Azure VM** (Ubuntu 24.04 LTS, **Standard_B4s_v2**), non-spot, Docker Compose
-  betreibt Caddy + Keycloak + Postgres. Bewusst die **v2**-B-Serie: die alte
-  (`B4ms`) deckelt den Plattendurchsatz bei 2.880 IOPS / 35 MB/s — unterhalb der
-  Baseline einer einzigen Premium-v2-Platte — und das bei identischem Preis
-  (~140 $/Monat). `D4as_v5` hätte dieselben Plattenwerte, aber dedizierte statt
-  burstbarer CPU für ~12 $/Monat mehr; der Wechsel lohnt, sobald der CPU-Credit-Alert
-  regelmäßig auslöst.
+- **1 Azure VM** (Ubuntu 24.04 LTS, **Standard_D4ps_v6**: 4 vCPU ARM64 / Azure Cobalt
+  100, 16 GiB, 6.400 IOPS), non-spot, Docker Compose betreibt Caddy, Keycloak,
+  Confluence und Postgres. Ausgesucht nach Preis: ~105 €/Monat Liste gegenüber ~120 €
+  für die Intel-`B4s_v2` davor, und dazu eigene Kerne statt Burst-Credits. Alle
+  x86-Größen mit 4 vCPU / 16 GiB kosten in der Region gleich viel oder mehr, bis auf
+  die AMD-`B4as_v2`. Für die fehlt aber Quota (*Standard Basv2 Family vCPUs* steht auf
+  3, gebraucht werden 4), und mehr gibt Microsoft in der Region nicht her. Alle Images
+  in `compose/` gibt es für ARM64.
 
-  Das AMD-Pendant `B4as_v2` ist technisch identisch (jedes von Azure ausgewiesene
-  Attribut stimmt überein, nur das Silizium unterscheidet sich) und ~14 $/Monat
-  günstiger, scheitert in diesem Abo aber an der Quota: *Standard Basv2 Family vCPUs*
-  steht auf 3, gebraucht werden 4 — *Standard Bsv2 Family vCPUs* dagegen auf 65. Wird
-  die Quota erhöht, ist der Wechsel eine Zeile in `terraform.tfvars` plus Neustart;
-  `VM_SIZE` steckt nicht in `custom_data`, es braucht also keinen VM-Neuaufbau.
+  **Ein Wechsel zwischen ARM64 und x86 baut die VM neu**, weil das Ubuntu-Image je
+  Architektur ein anderes ist (`local.vm_arm64` in `terraform/vm.tf` leitet es aus
+  `VM_SIZE` ab). Die Datenplatten überleben das; der Ablauf steht in
+  [MIGRATION.md](MIGRATION.md) unter „Umzug auf ARM64". Innerhalb derselben
+  Architektur ist ein Größenwechsel ein Resize mit Neustart.
 - **Drei Datenplatten**, alle unter `/data` (nicht unter `/mnt` — dort hängt der Azure-
   Agent auf Größen mit Temp-Disk den *flüchtigen* Datenträger ein, was ein bekannter
-  Weg ist, persistente Daten zu verlieren; `B4s_v2` hat gar keine Temp-Disk):
+  Weg ist, persistente Daten zu verlieren; `D4ps_v6` hat gar keine Temp-Disk):
 
   | LUN | Mount | Typ | Größe | Inhalt |
   |---|---|---|---|---|
@@ -68,9 +68,10 @@ Rollback) — siehe unten.
   (`terraform/backup.tf`) sichert täglich die VM samt *aller* Platten in einem
   gemeinsamen, untereinander konsistenten Wiederherstellungspunkt und kann einzelne
   Dateien zurückholen. Details und der Wiederherstellungsablauf weiter unten.
-- **Alerting** (`terraform/monitoring.tf`) für die zwei Fehlerfälle, die sonst
-  unbemerkt bleiben: volllaufende Platte (per Azure Monitor Agent, da Azure nicht ins
-  Gast-Dateisystem sieht) und aufgebrauchte CPU-Credits der B-Serie.
+- **Alerting** (`terraform/monitoring.tf`) für volllaufende Platten (per Azure Monitor
+  Agent, da Azure nicht ins Gast-Dateisystem sieht) samt Totmannschalter, falls der
+  Agent keine Daten mehr liefert. Der Alert für aufgebrauchte CPU-Credits entsteht nur
+  bei einer B-Serie-Größe, die `D4ps_v6` hat keine.
 - **Azure Key Vault** hält alle Secrets (Postgres-Passwörter, Keycloak-Admin-Passwort,
   Ubuntu-Pro-Token, Git-Deploy-Key). Die VM zieht sie beim Boot per Managed Identity.
 - **Caddy** übernimmt automatisches Let's-Encrypt-HTTPS (HTTP-01), kein separates
@@ -258,7 +259,10 @@ committen.
    ```
    Soll eine cloud-init-Änderung wirklich greifen, die VM bewusst neu bauen:
    `terraform apply -replace=azurerm_linux_virtual_machine.app`. Die Daten überleben
-   das, alle drei Datenplatten sind eigene Ressourcen.
+   das, alle drei Datenplatten sind eigene Ressourcen, und der Azure-Backup-Eintrag
+   bleibt samt seinen Wiederherstellungspunkten stehen (siehe Kommentar in
+   `terraform/backup.tf`). Ein Neuaufbau ist trotzdem ein Ausfall aller Dienste; als
+   Ablauf taugt der aus [MIGRATION.md](MIGRATION.md), „Umzug auf ARM64".
 
    `DOMAIN_AUTH`/`LETSENCRYPT_EMAIL` sind davon **nicht** betroffen — die liegen
    bewusst in Key Vault statt in `custom_data`. Eine Domain-Änderung braucht also
