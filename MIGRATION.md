@@ -216,6 +216,25 @@ Container stoppen. Das alte System läuft unverändert weiter.
 **Wartungsfenster, Nutzer betroffen.** Zwei Stunden ankündigen; der Ablauf selbst
 dauert nach den Messungen aus Phase 1 etwa 45–60 Minuten.
 
+### Stand 24.09.2026: durchgeführt
+
+- **Keycloak** auf AKS gestoppt um 09:28 UTC, **Confluence** um 09:32 UTC. Der Stack auf
+  der VM lief ab 09:37 UTC unter den echten Namen, das Wiki war ab etwa 09:40 UTC
+  erreichbar. Freigegeben (Nur-Lese-Modus aus) nach den Prüfungen.
+- Alle Prüfungen aus Schritt 10 grün, über IPv4 und IPv6: OIDC-Issuer und SAML-entityID
+  `https://auth.dpvonline.de/realms/DPV`, Base URL `https://wiki.dpvonline.de`,
+  Let's-Encrypt-Zertifikate bis 23.12., keine Fehler in Confluence und Keycloak.
+  Inhaltszahlen der Datenbank identisch mit AKS, Home-Verzeichnis 17 von 17 Einträgen
+  identisch. Full-Backup direkt danach (203 MB).
+- **Beobachtet:** Bei `auth.dpvonline.de` hielt der DNS-Cache des Admin-Macs noch den
+  alten Eintrag mit 6 Stunden TTL, weil Keycloak dort am selben Morgen aufgerufen worden
+  war. Server und Resolver hatten den neuen Stand längst; nach ein paar Minuten bzw.
+  `dscacheutil -flushcache` lief es. Für Cutover B: TTL mindestens einen Tag vorher
+  senken, dann stellt sich die Frage nicht.
+- **Offen:** AKS steht mit 0 Replikas für Keycloak und Confluence, die PVCs sind
+  unangetastet. Abriss nach ein paar unauffälligen Tagen, bis dahin im alten Repo kein
+  `terraform apply`.
+
 ### Wer merkt was
 
 | Zeitraum | Confluence | Anmeldung (Keycloak) | Nextcloud auf Lightsail |
