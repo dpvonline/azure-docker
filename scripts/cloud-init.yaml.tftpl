@@ -69,9 +69,17 @@ runcmd:
 
   # Format + mount the three data disks under /data, addressed by LUN (the LUN
   # numbers are assigned in terraform/vm.tf). The exact /dev/disk/azure/... path
-  # varies by controller, so try known candidates and retry briefly instead of
-  # assuming one fixed path; dump lsblk if none show up so the failure is
-  # diagnosable from cloud-init-output.log.
+  # varies by controller, so try known candidates instead of assuming one fixed
+  # path; dump lsblk if none show up so the failure is diagnosable from
+  # cloud-init-output.log.
+  #
+  # The wait is long on purpose. Terraform can only attach the disks once the
+  # VM exists, i.e. while it is already booting, and Azure took 17 minutes for
+  # that on the ARM64 rebuild of 2026-09-24 — with a 60-second wait cloud-init
+  # gave up, and Postgres initialised an empty cluster on the OS disk. Nothing
+  # else in runcmd needs to happen earlier, and Azure reports the VM as
+  # provisioned before runcmd starts, so waiting here blocks neither Terraform
+  # nor the disk attachments.
   #
   # Deliberately NOT under /mnt: on VM sizes that have a temporary disk, the
   # Azure agent mounts that ephemeral volume at /mnt, which makes it a
@@ -81,17 +89,19 @@ runcmd:
   - |
     mount_lun() {
       LUN="$1"; MOUNT="$2"; DEV=""
-      # Retry loop outside, candidates inside: waiting out the full 60s on one
-      # path before even trying the next would delay boot by minutes per disk
-      # when the device simply shows up under a different name.
-      for i in $(seq 1 30); do
+      # Retry loop outside, candidates inside: waiting out the full timeout on
+      # one path before even trying the next would never find a device that
+      # shows up under a different name. Up to 30 minutes per disk; the disks
+      # attach in parallel, so in practice that bounds the total as well.
+      for i in $(seq 1 900); do
         for candidate in "/dev/disk/azure/scsi1/lun$LUN" "/dev/disk/azure/scsi0/lun$LUN" "/dev/disk/azure/data/by-lun/$LUN"; do
           if [ -e "$candidate" ]; then DEV="$candidate"; break 2; fi
         done
+        [ $((i % 30)) -eq 0 ] && echo "waiting for data disk LUN $LUN ($((i / 30)) min)"
         sleep 2
       done
       if [ -z "$DEV" ]; then
-        echo "ERROR: no data disk for LUN $LUN found under known /dev/disk/azure paths after waiting" | tee -a /var/log/dpv-boot-warnings.log
+        echo "ERROR: no data disk for LUN $LUN found under known /dev/disk/azure paths after 30 minutes" | tee -a /var/log/dpv-boot-warnings.log
         lsblk | tee -a /var/log/dpv-boot-warnings.log
         return 1
       fi
@@ -104,8 +114,11 @@ runcmd:
     mount_lun 0 /data/postgres
     mount_lun 1 /data/apps
     mount_lun 2 /data/nextcloud
-  # 999 is the postgres user inside the container. The other two disks get
-  # their ownership when the applications using them arrive (see MIGRATION.md).
+  # 999 is the postgres user inside the container. On the host the same UID
+  # belongs to azureotelcollector, a system user the Azure Monitor Agent creates
+  # — harmless, the agent runs root-level components anyway. The other two
+  # disks get their ownership when the applications using them arrive (see
+  # MIGRATION.md).
   - chown -R 999:999 /data/postgres
 
   # Clone the repo (public half of the deploy key must already be added on
@@ -120,10 +133,19 @@ runcmd:
 
   # boot.sh refreshes secrets from Key Vault and brings the stack up — used
   # both for this first boot and by the systemd unit on every later boot.
+  # It refuses to start while a data disk is missing: Postgres would otherwise
+  # initialise a fresh, empty cluster in the bare /data/postgres directory and
+  # Keycloak and Confluence would run against it.
   - |
     cat > /opt/dpv/scripts/boot.sh <<'EOS'
     #!/usr/bin/env bash
     set -euo pipefail
+    for m in /data/postgres /data/apps /data/nextcloud; do
+      if ! mountpoint -q "$m"; then
+        echo "ERROR: $m is not mounted, not starting the stack" | tee -a /var/log/dpv-boot-warnings.log >&2
+        exit 1
+      fi
+    done
     az login --identity --allow-no-subscriptions >/dev/null
     /opt/dpv/scripts/fetch-secrets.sh "${key_vault_name}"
     cd /opt/dpv/compose
@@ -141,6 +163,11 @@ runcmd:
   # is deployed: the script exits early when the table does not exist.
   - cp /opt/dpv/scripts/systemd/dpv-confluence-prune.service /etc/systemd/system/dpv-confluence-prune.service
   - cp /opt/dpv/scripts/systemd/dpv-confluence-prune.timer /etc/systemd/system/dpv-confluence-prune.timer
+  # Docker starts the containers itself after a reboot (restart:
+  # unless-stopped), without going through boot.sh — this keeps it from doing
+  # so while a data disk is missing. Takes effect from the next boot; on this
+  # first one the boot.sh check above covers it.
+  - install -D -m 0644 /opt/dpv/scripts/systemd/docker.service.d/10-dpv-data-mounts.conf /etc/systemd/system/docker.service.d/10-dpv-data-mounts.conf
 
   - systemctl daemon-reload
   - systemctl enable --now dpv-compose.service

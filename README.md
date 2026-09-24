@@ -160,10 +160,20 @@ sudo systemctl start dpv-update.service                          # läuft ohne R
 
 - **Datenplatten-Gerätepfad**: cloud-init mountet die drei Platten über ihre LUN
   (`mount_lun 0|1|2`) und probiert dabei mehrere bekannte `/dev/disk/azure/...`-Pfade
-  mit Retry (60s) durch; taucht keiner auf, landet `lsblk` in
-  `/var/log/dpv-boot-warnings.log`. Sollte das passieren: `lsblk` und
-  `findmnt /data/postgres /data/apps /data/nextcloud` auf der VM prüfen und ggf. einen
-  weiteren Pfad in `scripts/cloud-init.yaml.tftpl` ergänzen.
+  durch, bis zu 30 Minuten lang: Terraform hängt die Platten erst an die schon
+  bootende VM, und Azure hat dafür beim ARM64-Neuaufbau 17 Minuten gebraucht. Taucht
+  keiner auf, landet `lsblk` in `/var/log/dpv-boot-warnings.log`. Dann `lsblk` und
+  `findmnt` für `/data/postgres`, `/data/apps`, `/data/nextcloud` auf der VM prüfen und
+  ggf. einen weiteren Pfad in `scripts/cloud-init.yaml.tftpl` ergänzen.
+- **Ohne alle drei Platten startet nichts, absichtlich.** Sonst legt Postgres im leeren
+  Verzeichnis `/data/postgres` auf der OS-Platte ein frisches Cluster an, und Keycloak
+  und Confluence laufen gegen eine leere Datenbank (so passiert beim ARM64-Neuaufbau,
+  siehe [MIGRATION.md](MIGRATION.md)). Zwei Sperren: `boot.sh` prüft die Mounts vor
+  `docker compose up`, und ein Drop-in (`scripts/systemd/docker.service.d/`) lässt
+  Docker erst starten, wenn alle drei eingehängt sind — wichtig nach einem Neustart,
+  denn dann startet Docker die Container selbst (`restart: unless-stopped`), ohne
+  `boot.sh`. Fehlt eine Platte, bleibt der ganze Stack aus; die Platte nachziehen
+  (`sudo mount /data/…`), dann `sudo systemctl restart docker dpv-compose.service`.
 - **Premium SSD v2 Regionsverfügbarkeit**: `germanywestcentral` sollte PremiumV2_LRS
   unterstützen, aber das ändert sich bei Azure gelegentlich — bei Fehlern in
   `terraform plan`/`apply` ggf. auf `Premium_LRS` in `terraform/vm.tf`
