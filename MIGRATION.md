@@ -420,6 +420,24 @@ es trotzdem, mit `amcheck` über alle Indizes; Dumps liegen als Rückfall bereit
 Getestet am 24.09.: In Zone 1 ist Hardware für `D4ps_v6` frei, auch mit Premium SSD v2
 als Datenplatte. Eine Garantie für den Tag des Umzugs ist das nicht (siehe Rollback A).
 
+### Stand 24.09.2026: durchgeführt
+
+- Stack gestoppt um 13:28 UTC, `terraform apply` 13:30–13:49, Keycloak und Wiki wieder
+  da ab 14:08. Ausfall 40 Minuten. Alle Prüfungen grün: gleiche Systemkennung,
+  `amcheck` über 1.485 Indizes fehlerfrei, Zahlen identisch, pgBackRest `check` und
+  Full-Backup, IPv4 und IPv6, Login.
+- **Vorfall:** Azure brauchte 17 Minuten, um die Datenplatten an die neue VM zu
+  hängen; cloud-init wartete damals nur 60 Sekunden je Platte. Eingehängt wurde nur
+  `/data/apps`. Postgres legte daraufhin auf der OS-Platte ein leeres Cluster an,
+  Keycloak und Wiki liefen von 13:38 bis 14:04 dagegen (Logins scheiterten).
+  Geschrieben wurde in die echten Daten nichts, und pgBackRest wies das fremde
+  Cluster wegen der anderen system-id ab. Behoben per Hand: Stack gestoppt, leeres
+  Cluster nach `/root/pgdata-leeres-cluster-os-platte` verschoben, LUN 0 und 2
+  eingehängt. Seitdem wartet cloud-init bis zu 30 Minuten, `boot.sh` startet den
+  Stack nur mit allen drei Mounts, und Docker selbst startet erst, wenn sie da sind
+  (`scripts/systemd/docker.service.d/`).
+- Livepatch gibt es auf ARM64 nicht (`pro status`: `n/a`), ESM läuft.
+
 ### Wer merkt was
 
 | Zeitraum | Wiki | Anmeldung (Keycloak) | Nextcloud auf Lightsail |
@@ -443,7 +461,7 @@ als Datenplatte. Eine Garantie für den Tag des Umzugs ist das nicht (siehe Roll
 | 1 | Sicherung: Zahlen notieren, Dumps, Full-Backup | 5 Min. | – |
 | 2 | Stack sauber stoppen, `pg_control` notieren — **Ausfall beginnt** | 2 Min. | `docker compose up -d` |
 | 3 | `VM_SIZE` umstellen, `terraform apply` | 5–10 Min. | **A** |
-| 4 | Host-Key prüfen, cloud-init abwarten | 10–15 Min. | A |
+| 4 | Host-Key prüfen, cloud-init abwarten, **alle drei Mounts prüfen** | 10–30 Min. | A |
 | 5 | Postgres prüfen | 5 Min. | **B** |
 | 6 | pgBackRest prüfen, Full-Backup | 5 Min. | |
 | 7 | Keycloak und Wiki prüfen | 10 Min. | A |
@@ -504,8 +522,18 @@ Auf der VM:
 cloud-init status --wait --long
 sudo cat /var/log/dpv-boot-warnings.log
 uname -m                                             # aarch64
-findmnt /data/postgres /data/apps /data/nextcloud
+for m in /data/postgres /data/apps /data/nextcloud; do findmnt -n "$m" || echo "$m FEHLT"; done
 ```
+
+**Alle drei Platten müssen eingehängt sein, bevor es weitergeht.** cloud-init wartet
+bis zu 30 Minuten auf sie, weil Terraform sie erst an die schon bootende VM hängt;
+`cloud-init status --wait` kann also entsprechend lange dauern. Fehlt danach trotzdem
+eine, startet `boot.sh` den Stack nicht (Eintrag in `dpv-boot-warnings.log`). Dann die
+Platte mit `sudo mount /data/…` nachziehen, sobald `/dev/disk/azure/scsi1/lun<N>`
+existiert (die Zeile in `/etc/fstab` schreibt cloud-init nur für eingehängte Platten:
+`/dev/disk/azure/scsi1/lun<N> /data/… ext4 defaults,nofail 0 2`), und danach
+`sudo systemctl restart dpv-compose.service`. **Nie `mkfs` von Hand:** die Platten
+haben ihr Dateisystem schon, `blkid` zeigt es.
 
 Scheitert cloud-init am Key Vault (`Forbidden` in `/var/log/cloud-init-output.log`),
 war die neue Rollenzuweisung noch nicht wirksam: fünf Minuten warten, dann
