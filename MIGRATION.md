@@ -691,7 +691,9 @@ das Zertifikat passt trotzdem.
    einmalig die vier DNS-Einträge übernehmen, die bis zum 24.09. dem alten Repo gehörten
    (dort per `state rm` abgegeben):
    ```
-   Z="$(az network dns zone show -g Infra -n scout-tools.de --query id -o tsv)"
+   # von Hand gebaut: `az network dns zone show` liefert "dnszones" und "infra"
+   # kleingeschrieben, das lehnt der Provider ab
+   Z="/subscriptions/$(az account show --query id -o tsv)/resourceGroups/Infra/providers/Microsoft.Network/dnsZones/scout-tools.de"
    terraform import azurerm_dns_a_record.cloud     "$Z/A/cloud"
    terraform import azurerm_dns_aaaa_record.cloud  "$Z/AAAA/cloud"
    terraform import azurerm_dns_a_record.office    "$Z/A/office"

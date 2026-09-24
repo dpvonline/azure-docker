@@ -48,7 +48,9 @@ resource "azurerm_dns_aaaa_record" "wiki" {
 # created here, they have to be imported once before the first apply that
 # contains them (see MIGRATION.md, Phase 3, and the commands below):
 #
-#   Z="$(az network dns zone show -g Infra -n scout-tools.de --query id -o tsv)"
+#   # Built by hand, not from `az network dns zone show`: that returns "dnszones"
+#   # and "infra" in lower case, which the provider rejects.
+#   Z="/subscriptions/$(az account show --query id -o tsv)/resourceGroups/Infra/providers/Microsoft.Network/dnsZones/scout-tools.de"
 #   terraform import azurerm_dns_a_record.cloud     "$Z/A/cloud"
 #   terraform import azurerm_dns_aaaa_record.cloud  "$Z/AAAA/cloud"
 #   terraform import azurerm_dns_a_record.office    "$Z/A/office"
