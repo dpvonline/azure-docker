@@ -10,7 +10,7 @@ services:
     # version jump; on a patch bump the image's entrypoint runs `occ upgrade`
     # by itself. Majors stay manual (renovate.json): one major per step, and
     # every installed app has to support the new one first.
-    image: nextcloud:33.0.9-apache
+    image: nextcloud:35.0.0-apache
     restart: unless-stopped
     depends_on:
       - postgres
@@ -42,7 +42,7 @@ services:
   # real data, and its reminders and notifications would otherwise reach real
   # users — the Nextcloud counterpart of Confluence's mail lock in Phase 1.
   nextcloud-cron:
-    image: nextcloud:33.0.9-apache
+    image: nextcloud:35.0.0-apache
     restart: unless-stopped
     profiles: ["nextcloud-live"]
     depends_on:
