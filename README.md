@@ -1,8 +1,8 @@
 # azure-docker
 
 Neues Infra-Repo für den DPV-Stack: eine einzelne Azure-VM mit Docker Compose statt AKS.
-Ersetzt schrittweise `azure-infrastructure` (das alte Repo bleibt in Betrieb, bis dieses
-hier funktioniert und der DNS-Cutover erfolgt ist).
+Löst `azure-infrastructure` ab; AKS ist seit dem 28.10.2026 abgerissen, das alte Repo
+archiviert.
 
 ## Status: Kern-Phase
 
@@ -81,16 +81,14 @@ Rollback), OS-Updates laufen nächtlich per `unattended-upgrades` — siehe unte
   cert-manager/nginx-ingress nötig.
 - **Terraform-State liegt remote** in einem Azure Storage Account (`bootstrap/` legt ihn
   einmalig an, da der Storage Account nicht sein eigenes Backend sein kann).
-- **DNS zum Testen**: `auth.scout-tools.de` — die Zone `scout-tools.de` gehört weiterhin dem
-  alten Repo (`azure-infrastructure`, `azure/domain.tf`), dieses Repo referenziert sie nur
-  per `data`-Quelle und verwaltet einen einzelnen neuen Record (`auth`, dort aktuell
-  auskommentiert/nicht angelegt) über `terraform/dns.tf`. **Für den echten Cutover** liegt
-  `dpvonline.de` extern (nicht Azure DNS) — der Umstieg der A/AAAA-Records auf die neue
-  VM-IP bleibt dann ein manueller Schritt, nicht Teil dieses Repos.
-- **Resource Group**: bewusst eine neue (`rg-dpv-core`), getrennt von `Infra` (dem alten
-  Repo) — nur noch der DNS-Record referenziert `Infra` per `data`-Quelle, nichts davon
-  wird hier verändert oder mitverwaltet. (Die ACR-Referenz gab es ausschließlich für das
-  Biber-Backend und ist mit diesem entfallen.)
+- **DNS**: `dpvonline.de` liegt extern bei IONOS (nicht Azure DNS); A/AAAA-Records auf
+  die VM sind dort ein manueller Schritt, nicht Teil dieses Repos. Die Zone
+  `scout-tools.de` (bis zu den Cutovers die Testnamen) gehört seit dem AKS-Abriss diesem
+  Repo und liegt in `rg-dpv-core`, derzeit ohne eigene Records. Sie steht in
+  `terraform/dns.tf` unter `prevent_destroy`: Eine neu angelegte Zone bekäme andere
+  Nameserver als die, auf die der Registrar delegiert.
+- **Resource Group**: bewusst eine neue (`rg-dpv-core`). `Infra`, die Gruppe des alten
+  Repos, ist mit dem AKS-Abriss gelöscht.
 
 ## Einmalige Umstellung auf Postgres 18 (Phase 0)
 
@@ -291,10 +289,9 @@ committen.
      Postgres-User, nicht mit einem Linux-User auf der VM zu verwechseln, den es nicht gibt;
      `docker exec`/`compose exec` läuft sonst als `root`, und pgBackRest verbindet sich lokal
      dann fälschlich als Rolle `root` statt `postgres`)
-   - DNS für `auth.scout-tools.de` ist bereits durch `terraform/dns.tf` gesetzt (zeigt auf
-     `vm_public_ip`) — sobald das propagiert ist, stellt Caddy automatisch ein
-     Let's-Encrypt-Zertifikat aus. Für den späteren Produktiv-Cutover auf eine
-     `dpvonline.de`-Subdomain bleibt das ein manueller DNS-Schritt (siehe oben).
+   - A- und AAAA-Records der Domains aus `DOMAIN_*` müssen auf `vm_public_ip` bzw.
+     `vm_public_ipv6` zeigen (bei IONOS von Hand, siehe oben) — sobald das propagiert
+     ist, stellt Caddy automatisch ein Let's-Encrypt-Zertifikat aus.
 
 4. Verifikation: `curl -I https://<DOMAIN_AUTH>` (von außen) und, da Keycloaks Port 9000
    absichtlich nicht auf den Host published ist (nur Caddy erreicht ihn intern), von der VM aus:
