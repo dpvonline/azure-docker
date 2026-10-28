@@ -34,6 +34,8 @@ services:
       # User files — the path stays /var/www/html/data inside the container, so
       # `datadirectory` in config.php does not change with the move.
       - /data/nextcloud:/var/www/html/data
+      # OPcache JIT off — the reason is in the file.
+      - ./nextcloud/zz-dpv-opcache-jit.ini:/usr/local/etc/php/conf.d/zz-dpv-opcache-jit.ini:ro
     # Port 80 is intentionally not published — Caddy reaches it over "dpv".
 
   # Background jobs (trash and version expiry, file scans, calendar reminders,
@@ -56,6 +58,7 @@ services:
     volumes:
       - /data/apps/nextcloud:/var/www/html
       - /data/nextcloud:/var/www/html/data
+      - ./nextcloud/zz-dpv-opcache-jit.ini:/usr/local/etc/php/conf.d/zz-dpv-opcache-jit.ini:ro
 
   redis:
     # Cache and file locking only — nothing in it has to survive a restart, so
