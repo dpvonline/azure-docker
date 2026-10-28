@@ -2,7 +2,7 @@
 
 Neues Infra-Repo für den DPV-Stack: eine einzelne Azure-VM mit Docker Compose statt AKS.
 Löst `azure-infrastructure` ab; AKS ist seit dem 28.10.2026 abgerissen, das alte Repo
-wird archiviert.
+archiviert.
 
 ## Status: Kern-Phase
 
