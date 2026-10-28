@@ -21,6 +21,12 @@ services:
       - "archive_command=pgbackrest --stanza=main --config=/etc/pgbackrest/pgbackrest.conf archive-push %p"
       - "-c"
       - "archive_timeout=600"
+      # Keycloak, Confluence and Nextcloud share this instance. The default of
+      # 100 ran out on 27.10.2026 (Confluence alone keeps ~23 open, Apache in
+      # the Nextcloud container may run up to 150 children, each with its own
+      # connection). Each idle connection costs a few MB, so 200 is cheap here.
+      - "-c"
+      - "max_connections=200"
     volumes:
       - /data/postgres:/var/lib/postgresql/data
       - ./init-db.sql:/docker-entrypoint-initdb.d/init-db.sql:ro

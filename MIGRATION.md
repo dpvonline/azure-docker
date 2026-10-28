@@ -892,6 +892,35 @@ Nutzer betroffen.** Der Ablauf ist der aus Phase 3 mit denselben Skripten. Dauer
 letzte Delta-Lauf (am Vortag messen) plus ~15 Minuten für Dump, Konvertierung und
 Prüfen.
 
+### Stand 23.10.2026: durchgeführt
+
+- Vorher auf beiden Seiten auf Nextcloud **33.0.10** (PHP-Sicherheitsupdate). Der
+  Renovate-PR dafür (#35) sprang versehentlich auf 35 und wurde mit #37 auf 33.0.10
+  korrigiert, bevor die VM ihn zog. Seitdem öffnet Renovate je Major einen eigenen PR
+  (`separateMultipleMajor`).
+- `nc-sync.sh delta` vorab, im Fenster `nc-sync.sh cutover` in **27 Sekunden**
+  (10:20 UTC), dann Datenbank, Konvertierung, DNS. Bilder, PDFs und Office-Dateien
+  über Collabora funktionieren.
+- Lightsail steht im Wartungsmodus, der Host-Cron ist entfernt. Erreichbar per SSH
+  jetzt nur noch über die IP `3.65.3.213`, Port 1987 — `cloud.dpvonline.de` zeigt auf
+  die VM.
+- **Offen:** Aufräumen (siehe „Danach"), erst wenn alles als funktionsfähig gemeldet
+  ist.
+
+**Vorfall: PHP-Abstürze ab 23.10.** Nextcloud fiel wiederholt aus (Caddy: 502), bis
+der Container neu gestartet wurde. Ursache: Apache-Kindprozesse beendeten sich mit
+`Segmentation fault` — 502 am 23.10., 107 am 25.10., 68 am 28.10. Einmal begonnen,
+stürzte jeder neue Prozess ab, bis Apache neu startete; der Container selbst lief
+weiter (kein Neustart, kein OOM). Hauptverdacht ist der OPcache-JIT, den das Image
+einschaltet (`opcache.jit=1255`): sein Code liegt in gemeinsamem Speicher, und er lief
+erstmals unter echter Last, auf ARM64, mit dem neuen PHP 8.4.27. Bewiesen ist das
+nicht (kein Core-Dump, der Kernel protokollierte nichts). Seit 28.10. ist der JIT aus
+([`compose/nextcloud/zz-dpv-opcache-jit.ini`](compose/nextcloud/zz-dpv-opcache-jit.ini)).
+Stürzt es weiter ab: Core-Dumps aktivieren und die Stelle bestimmen.
+
+Nebenbefund: Am 27.10. war Postgres eine Stunde lang voll (236 abgelehnte
+Verbindungen, Standard 100). Seitdem `max_connections=200`.
+
 ### Vorbereitung
 
 - **Mindestens einen Tag vorher bei IONOS** die TTL von `cloud.` und `office.dpvonline.de`
