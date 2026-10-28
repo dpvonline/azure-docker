@@ -6,22 +6,18 @@
   "timezone": "UTC",
   "schedule": ["before 6am on sunday"],
   "minimumReleaseAge": "7 days",
-  "separateMultipleMajor": true,
+  "internalChecksFilter": "strict",
+  "maxMajorIncrement": 1,
   "packageRules": [
     {
-      "description": "Patch/minor bumps are safe to roll out unattended — the weekly VM update run (scripts/update-containers.sh) takes a fresh backup and health-checks before/after.",
+      "description": "Patch/minor bumps are safe to roll out unattended — the weekly VM update run (scripts/update-containers.sh) takes a fresh backup and health-checks before/after. The repo has no CI, so the only status check on a Renovate branch is Renovate's own renovate/stability-days, which by default does not count towards a green branch — without internalChecksAsSuccess the branch never turns green and nothing is ever automerged.",
       "matchUpdateTypes": ["patch", "minor"],
-      "automerge": true
+      "automerge": true,
+      "internalChecksAsSuccess": true
     },
     {
-      "description": "Major bumps (e.g. postgres 17->18) can mean incompatible on-disk data or breaking changes — always reviewed manually, never auto-merged.",
+      "description": "Major bumps (e.g. postgres 17->18) can mean incompatible on-disk data or breaking changes — always reviewed manually, never auto-merged. maxMajorIncrement above keeps each PR to a single major step: Nextcloud refuses to start when a major is skipped (33 -> 35), so 34 -> 35 is only offered once 33 -> 34 is merged.",
       "matchUpdateTypes": ["major"],
-      "automerge": false
-    },
-    {
-      "description": "Confluence minor releases run database upgrade tasks and regularly break installed apps; only patch releases roll out unattended, minors get a PR for manual review.",
-      "matchPackageNames": ["atlassian/confluence"],
-      "matchUpdateTypes": ["minor"],
       "automerge": false
     }
   ]

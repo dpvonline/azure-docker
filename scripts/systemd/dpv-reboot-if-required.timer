@@ -1,0 +1,13 @@
+[Unit]
+Description=Weekly trigger for dpv-reboot-if-required.service
+
+[Timer]
+# Sunday morning, in the same quiet window as the 03:30 container update and
+# after it: dpv-update.service gives up after 30 minutes, so it is done by
+# 04:00. The stack is back before the 04:30 Confluence prune.
+# No Persistent=true on purpose — catching up at boot would mean rebooting a
+# VM that just booted.
+OnCalendar=Sun *-*-* 04:10:00
+
+[Install]
+WantedBy=timers.target

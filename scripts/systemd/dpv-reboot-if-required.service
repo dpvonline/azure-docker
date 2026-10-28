@@ -1,0 +1,15 @@
+[Unit]
+Description=DPV weekly reboot, only if an installed update asked for one
+# Written by package hooks (mostly a new kernel), see
+# scripts/apt/52dpv-unattended-upgrades. Lives in /run, so a reboot for any
+# other reason clears it too. Without it the unit is skipped, not failed.
+ConditionPathExists=/run/reboot-required
+
+[Service]
+Type=oneshot
+# Never cut into an update run that started late (Persistent=true catching up
+# after downtime): skip this week instead, the next Sunday picks it up.
+ExecCondition=/bin/sh -c '! systemctl is-active --quiet dpv-update.service'
+# Into the journal, so it is clear afterwards what the reboot was for.
+ExecStartPre=-/bin/cat /run/reboot-required.pkgs
+ExecStart=/usr/bin/systemctl reboot
