@@ -1220,9 +1220,9 @@ Platten, und weder `boot.sh` noch Docker starten den Stack ohne alle drei Mounts
 verloren geht, ist bekannt. Zertifikate und Images kommen von selbst wieder, Logs
 sichert Schritt 1, Handarbeit erfasst die Vorbereitung.
 
-Für Postgres ändert sich diesmal nur der Kernel darunter. Architektur, Image
-`postgres:18`, glibc im Container (und damit die Sortierung) und Datenverzeichnis
-bleiben gleich. Dumps und `amcheck` wie beim ARM64-Umzug braucht es deshalb nicht.
+Für Postgres ändert sich diesmal praktisch nichts. Architektur, Image `postgres:18`,
+glibc im Container (und damit die Sortierung) und Datenverzeichnis bleiben gleich, und
+selbst der Kernel ist schon heute 7.0 (Risiko 1). Dumps und `amcheck` wie beim ARM64-Umzug braucht es deshalb nicht.
 Rückfall sind das Full-Backup aus Schritt 1 und die Azure-Sicherung der Nacht.
 
 ### Kompatibilität (geprüft am 28.10.2026)
@@ -1241,7 +1241,7 @@ Rückfall sind das Full-Backup aus Schritt 1 und die Azure-Sicherung der Nacht.
 
 ### Offene Risiken
 
-1. **Postgres unter Linux 7.0.** Ubuntu führt als bekanntes Problem, dass Linux 7.0
+1. **Postgres unter Linux 7.0 — kein Risiko des Umzugs.** Ubuntu führt als bekanntes Problem, dass Linux 7.0
    Durchsatz und Latenz von Postgres deutlich verschlechtern kann; Systeme mit Huge
    Pages sind nicht betroffen. Ursache laut [LKML-Thread](https://lkml.iu.edu/hypermail/linux/kernel/2604.0/06945.html):
    Beim Verdrängen eines Puffers (`StrategyGetBuffer`) hält Postgres einen Spinlock,
@@ -1262,15 +1262,14 @@ Rückfall sind das Full-Backup aus Schritt 1 und die Azure-Sicherung der Nacht.
      Nextcloud). Ohne Huge Pages ist ein großer Puffer laut Andres Freund auch dort
      „utterly terrible" (etwa ein Drittel des Durchsatzes). Kein Grund, 19 deswegen
      vorzuziehen.
-   - **Hier:** `shared_buffers` steht auf dem Standard von 128 MB, bei 4 vCPU. Laut
-     Freund tritt das Problem „with a smaller buffer pool" nicht auf. Für so kleine
-     Maschinen gibt es aber keine Messung. Womöglich läuft die VM ohnehin schon darauf:
-     `linux-azure` ist auch auf 24.04 bei 7.0 angekommen (`noble-updates`:
-     `7.0.0-1017.17~24.04.1`). Zeigt `uname -r` heute schon `7.0.…`, ist das Risiko
-     längst im Betrieb, und der Umzug ändert daran nichts.
-   - **Gegenmittel** sind Huge Pages (Rollback C). Sie wirken unabhängig von
-     Postgres-Version und Kernel und lassen sich auch vor dem Umzug einschalten. Ohne
-     sie gibt es die Messung vorher und nachher.
+   - **Hier:** Die VM läuft schon auf 7.0. `uname -r` zeigte am 28.10.
+     `7.0.0-1017-azure`, denn `linux-azure` ist auch auf 24.04 bei 7.0 angekommen. Der
+     Umzug ändert daran nichts, ein Rollback auf 24.04 auch nicht. `shared_buffers`
+     steht auf dem Standard von 128 MB, bei 4 vCPU. Laut Freund tritt das Problem „with
+     a smaller buffer pool" nicht auf; für so kleine Maschinen gibt es aber keine
+     Messung. Ob es hier durchschlägt, zeigt der Abschnitt „Huge Pages für Postgres".
+   - **Gegenmittel** sind Huge Pages, als eigene Änderung, unabhängig vom Umzug (siehe
+     „Huge Pages für Postgres"). Sie wirken unabhängig von Postgres-Version und Kernel.
 2. **Kernelwechsel innerhalb von 26.04.** `linux-azure` zieht während eines LTS auf
    neuere Kernel nach: bei 24.04 von 6.8 bis heute auf 7.0, während
    `linux-azure-lts-24.04` bei 6.8 blieb. Bei 26.04 voraussichtlich ab 26.04.2 im Februar
@@ -1319,18 +1318,6 @@ Rückfall sind das Full-Backup aus Schritt 1 und die Azure-Sicherung der Nacht.
   in cloud-init nachtragen oder bewusst fallen lassen. Unter `/root` liegen womöglich
   noch Reste aus früheren Schritten (etwa `pgdata-leeres-cluster-os-platte`,
   `config.php.before-pgsql.*`), die mit der OS-Platte verschwinden.
-- **Vergleichswert für Postgres** (entfällt, wenn `uname -r` schon `7.0.…` zeigt, siehe
-  Risiko 1), an einem ruhigen Abend, nicht zwischen 00:30 und 04:30 UTC:
-  ```
-  cd /opt/dpv/compose
-  P="sudo docker compose exec -T --user postgres postgres"
-  $P createdb pgbench_probe
-  $P pgbench -i -s 20 -q pgbench_probe
-  $P pgbench -c 8 -j 4 -T 60 -S pgbench_probe | grep -E "latency average|tps"
-  $P pgbench -c 8 -j 4 -T 60 pgbench_probe | grep -E "latency average|tps"
-  ```
-  Beide Ergebnisse notieren. `pgbench_probe` (~300 MB) bleibt für den Vergleich danach
-  stehen.
 - Kontingent für eine ARM64-Ausweichgröße (Rollback A) prüfen:
   `az vm list-usage -l germanywestcentral -o table | grep -iE "ps.*family|regional"`.
   Am 28.10.: `Dpsv6` 4 von 350, `Bpsv2` 0 von 65, regional 4 von 13 vCPUs.
@@ -1351,7 +1338,7 @@ Rückfall sind das Full-Backup aus Schritt 1 und die Azure-Sicherung der Nacht.
 | 6 | pgBackRest prüfen, Full-Backup | 5 Min. | |
 | 7 | Dienste prüfen | 15 Min. | A |
 | 8 | Livepatch prüfen | 5 Min. | – |
-| 9 | Freigeben, Azure Backup, Monitoring, Timer, Postgres-Vergleich | 30 Min. | wie A, auch danach; **C** |
+| 9 | Freigeben, Azure Backup, Monitoring, Timer | 15 Min. | wie A, auch danach |
 
 **1 — Sicherung.** Auf der alten VM:
 
@@ -1456,9 +1443,6 @@ alles weiter, nur mit wöchentlichen Neustarts.
   `/etc/cron.d/pgbackrest-full` existiert, und
   `sudo unattended-upgrade --dry-run --debug 2>&1 | grep -A6 'Allowed origins'` zeigt
   `resolute`.
-- Falls in der Vorbereitung gemessen: in einer ruhigen Stunde die beiden `pgbench`-Läufe
-  wiederholen. Deutlich schlechter (mehr als ein Fünftel weniger `tps`) oder fühlbar
-  langsamer: Rollback C. Danach `$P dropdb pgbench_probe`.
 - Im Repo: Default von `UBUNTU_RELEASE` in `terraform/variables.tf` auf `"26.04"`, die
   Zeile aus `terraform.tfvars` nehmen, `terraform plan` zeigt **No changes**. README
   („Ubuntu 24.04 LTS" unter Architektur) und hier einen „Stand"-Absatz nachtragen.
@@ -1477,9 +1461,23 @@ vorübergehend eine andere ARM64-Größe mit demselben Image, etwa
 `VM_SIZE = "Standard_B4ps_v2"` (Kontingent siehe Vorbereitung), und später zurück; das
 ist ein Resize mit Neustart, kein Neuaufbau.
 
-**C — Postgres merklich langsamer (Risiko 1).** Huge Pages einschalten, statt
-zurückzubauen. Auf der VM (`P` wie in Schritt 2) die nötige Zahl abfragen und mit
-etwas Luft reservieren:
+### Huge Pages für Postgres (unabhängig vom Umzug)
+
+Gegenmittel zu Risiko 1, auf 24.04 genauso wie auf 26.04, denn beide laufen auf Linux 7.0.
+Ob es nötig ist: Wartende auf einen umkämpften Spinlock zeigt Postgres als Wartezustand
+`SpinDelay`. Unter Last, etwa werktags am Vormittag, eine Minute lang zählen:
+
+```
+cd /opt/dpv/compose
+P="sudo docker compose exec -T --user postgres postgres"
+for i in $(seq 60); do
+  $P psql -Atc "select count(*) from pg_stat_activity where wait_event = 'SpinDelay'"
+  sleep 1
+done | sort -n | uniq -c
+```
+
+Fast nur Nullen heißt, dass es nicht durchschlägt. Tauchen regelmäßig Werte über null
+auf, die nötige Zahl Huge Pages abfragen und mit etwas Luft reservieren:
 
 ```
 $P psql -Atc "show shared_memory_size_in_huge_pages"     # z. B. 80
@@ -1487,10 +1485,11 @@ echo "vm.nr_hugepages = 100" | sudo tee /etc/sysctl.d/60-dpv-postgres-hugepages.
 sudo sysctl --system && grep HugePages_Total /proc/meminfo
 ```
 
-Dann im Repo `"-c", "huge_pages=on"` in `compose/docker-compose.postgres.yml` (`on`
-statt `try`, damit Postgres bei fehlenden Huge Pages nicht startet, statt leise ohne
-weiterzulaufen) und die sysctl-Datei in cloud-init nachtragen. Nach dem Ausrollen:
-`$P psql -Atc "show huge_pages_status"` zeigt `on`. Hilft das nicht, Rollback A.
+Dann im Repo `"-c", "huge_pages=on"` in `compose/docker-compose.postgres.yml` eintragen
+(`on` statt `try`, damit Postgres bei fehlenden Huge Pages nicht startet, statt leise
+ohne weiterzulaufen) und die sysctl-Datei in cloud-init nachtragen. Nach dem Ausrollen
+zeigt `$P psql -Atc "show huge_pages_status"` den Wert `on`. Wird `shared_buffers`
+später größer, die Zahl der Huge Pages mit anheben.
 
 ### Neustarts danach
 
