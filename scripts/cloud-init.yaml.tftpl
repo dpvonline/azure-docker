@@ -168,11 +168,19 @@ runcmd:
   # so while a data disk is missing. Takes effect from the next boot; on this
   # first one the boot.sh check above covers it.
   - install -D -m 0644 /opt/dpv/scripts/systemd/docker.service.d/10-dpv-data-mounts.conf /etc/systemd/system/docker.service.d/10-dpv-data-mounts.conf
+  # Nightly OS updates (Ubuntu, Docker, Azure CLI) at 00:30 UTC, and the reboot
+  # they may ask for on Sunday at 04:10 — see scripts/apt/52dpv-unattended-upgrades.
+  - install -m 0644 /opt/dpv/scripts/apt/52dpv-unattended-upgrades /etc/apt/apt.conf.d/52dpv-unattended-upgrades
+  - install -D -m 0644 /opt/dpv/scripts/systemd/apt-daily-upgrade.timer.d/10-dpv-schedule.conf /etc/systemd/system/apt-daily-upgrade.timer.d/10-dpv-schedule.conf
+  - cp /opt/dpv/scripts/systemd/dpv-reboot-if-required.service /etc/systemd/system/dpv-reboot-if-required.service
+  - cp /opt/dpv/scripts/systemd/dpv-reboot-if-required.timer /etc/systemd/system/dpv-reboot-if-required.timer
 
   - systemctl daemon-reload
   - systemctl enable --now dpv-compose.service
   - systemctl enable --now dpv-update.timer
   - systemctl enable --now dpv-confluence-prune.timer
+  - systemctl enable --now dpv-reboot-if-required.timer
+  - systemctl restart apt-daily-upgrade.timer
 
   # Nightly full backup (continuous WAL archiving handles the gaps in between)
   - echo "0 2 * * * root /opt/dpv/scripts/pgbackrest-full-backup.sh >> /var/log/pgbackrest-full.log 2>&1" > /etc/cron.d/pgbackrest-full

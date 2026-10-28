@@ -20,7 +20,7 @@ Wie diese Dienste von AKS bzw. AWS Lightsail hierher kommen, steht in
 **[MIGRATION.md](MIGRATION.md)** — Phasen, Cutover-Fenster, Rollback pro Schritt.
 
 Container-Updates sind seitdem automatisiert (Renovate + wöchentlicher Rollout mit
-Rollback) — siehe unten.
+Rollback), OS-Updates laufen nächtlich per `unattended-upgrades` — siehe unten.
 
 ## Architektur
 
@@ -494,11 +494,30 @@ per PR) und **Ausrollen** auf der VM (wöchentlich, automatisch, mit Rollback).
 weil es zusätzlich **Terraform-Provider-Versionen** abdeckt (`azurerm`/`random`/`tls`)
 und eingebautes Auto-Merge direkt in der Config hat (kein separater GitHub-Actions-
 Workflow nötig — praktisch, da unser `gh`-Token ohnehin keinen `workflow`-Scope hat).
-Konfiguriert in `renovate.json`: wöchentlich sonntags, `packageRules` mit Automerge nur
-für Patch/Minor — Major-Bumps (z. B. ein Sprung von `postgres:17` auf `18`) bleiben
-immer manuell zu mergen, weil sowas bei Postgres kein simpler Image-Swap ist
-(inkompatibles Datenverzeichnis, braucht `pg_upgrade`/Dump-Restore) und bei Keycloak
-größere Migrationen mit sich bringen kann.
+Konfiguriert in `renovate.json`:
+
+- **Wann**: neue PRs nur sonntags vor 06:00 UTC, und nur für Versionen, die
+  **mindestens 7 Tage** alt sind (`minimumReleaseAge` + `internalChecksFilter: strict`).
+  Jüngere stehen bis dahin als „pending" im Dependency Dashboard (Issue im Repo).
+- **Patch/Minor**: PR, den Renovate selbst mergt (Automerge) — für alle Dienste,
+  seit Oktober 2026 auch für Confluence-Minors (vorher nur Patches). Gemergt wird bei
+  einem der nächsten Renovate-Läufe nach dem Anlegen, nicht im selben. Bis Oktober 2026
+  hat Automerge nie gegriffen: Das Repo hat keine CI, der einzige Status-Check auf einem
+  Renovate-Branch ist Renovates eigener `renovate/stability-days`, und den zählt Renovate
+  standardmäßig nicht als „grün". `internalChecksAsSuccess` behebt das, ohne die
+  7-Tage-Prüfung auszuhebeln (anders als `ignoreTests`, das jeden Check übergeht).
+- **Major**: PR, aber nie Automerge — immer von Hand prüfen und mergen. Bei Postgres ist
+  ein Major kein simpler Image-Swap (inkompatibles Datenverzeichnis, braucht
+  `pg_upgrade`/Dump-Restore), bei Keycloak und Confluence können größere Migrationen
+  dranhängen, bei Nextcloud müssen alle installierten Apps die neue Version
+  unterstützen.
+- **Ein Major pro PR** (`maxMajorIncrement: 1`): Nextcloud startet nicht, wenn ein Major
+  übersprungen wird — ein PR 33 → 35 wie im Oktober 2026 ist damit ausgeschlossen.
+  34 → 35 bietet Renovate erst an, wenn 33 → 34 auf `main` ist. Faustregel: den
+  nächsten Major-PR desselben Dienstes erst mergen, wenn der vorige auf der VM
+  ausgerollt ist (`/var/log/dpv-update.log`), sonst rollt der Sonntagslauf beide auf
+  einmal aus. Bei Nextcloud fängt das zwar das Image selbst ab (Container startet
+  nicht → Health-Check → Rollback), aber jeder weitere Update-Lauf hängt dann daran fest.
 
 **Einmalig nötig** (schon erledigt): die Renovate-GitHub-App muss über
 https://github.com/apps/renovate auf `dpvonline/azure-docker` installiert werden —
@@ -527,7 +546,8 @@ war). Ablauf:
 
 **Ehrliche Grenze**: das Rollback bringt den Container-Stand zurück, aber falls eine
 DB-Migration (Keycloak führt bei *jeder* Versionsänderung welche aus, nicht nur bei
-Major-Versionen) vor dem Fehlschlag bereits teilweise gegriffen hat, ist das nicht
+Major-Versionen, Confluence bei Minor-Versionen) vor dem Fehlschlag bereits teilweise
+gegriffen hat, ist das nicht
 automatisch mit rückgängig gemacht — dafür ist das Vor-Update-Backup da (manueller
 Restore nach dem oben beschriebenen Ablauf).
 
@@ -543,11 +563,62 @@ Schedule/Logik brauchen dadurch keinen VM-Rebuild mehr, nur diese initiale Einf�
 brauchte noch einen (weil `cloud-init.yaml.tftpl`s `runcmd` sich geändert hat, um die
 Dateien einmalig zu kopieren).
 
+## Automatische OS-Updates
+
+`unattended-upgrades` spielt jede Nacht alles ein, was die Paketquellen der VM hergeben —
+nicht nur Sicherheitsupdates (Ubuntus Voreinstellung), sondern auch die regulären
+Ubuntu-Updates (`noble-updates`), Docker Engine + Compose-Plugin und die Azure CLI.
+Konfiguriert in `scripts/apt/52dpv-unattended-upgrades` (ergänzt Ubuntus
+`50unattended-upgrades`, ersetzt sie nicht),
+`scripts/systemd/apt-daily-upgrade.timer.d/10-dpv-schedule.conf` und
+`scripts/systemd/dpv-reboot-if-required.{service,timer}`.
+
+- **Wann**: täglich 00:30 UTC statt Ubuntus 06:00 plus bis zu einer Stunde Zufall — vor
+  Azure Backup (01:00), pgBackRest (02:00), Sonntags-Update (03:30) und
+  Confluence-Prune (04:30).
+- **Neustart**: höchstens einmal pro Woche, **sonntags 04:10 UTC** nach dem
+  Container-Update, und nur wenn ein Update ihn verlangt (`/run/reboot-required`, vor
+  allem Kernel). Ubuntu Pro hilft hier nicht: Livepatch gibt es auf ARM64 erst ab Ubuntu
+  26.04, die VM läuft auf 24.04 — Pro liefert ihr nur ESM. Der Preis des
+  Wochenrhythmus: ein Kernel-Fix liegt bis zu einer Woche installiert, aber inaktiv
+  herum. Läuft um 04:10 noch ein Update-Lauf, fällt der Neustart für diese Woche aus.
+  Der Stack kommt danach von selbst wieder hoch: Docker wartet auf die Datenplatten,
+  `dpv-compose.service` startet `boot.sh`.
+- **Docker-Updates** starten den Daemon neu und damit alle Container — ein paar Minuten
+  Ausfall in der Nacht, das meiste davon der Start von Confluence.
+- **Geänderte Konfigurationsdateien**: dpkg behält die lokale Version
+  (`--force-confold`), statt das Paket stillschweigend dauerhaft auszulassen.
+- **Nicht enthalten**: Ubuntu-Release-Upgrades (24.04 → 26.04) bleiben Handarbeit. Der
+  Azure Monitor Agent aktualisiert sich über `automatic_upgrade_enabled`
+  (`terraform/monitoring.tf`), die Container über Renovate (oben).
+
+Kontrolle auf der VM:
+```bash
+systemctl list-timers apt-daily-upgrade.timer dpv-reboot-if-required.timer
+cat /run/reboot-required.pkgs 2>/dev/null                         # wartet ein Neustart, und wofür?
+journalctl -u dpv-reboot-if-required.service                      # vergangene Sonntags-Neustarts
+sudo tail -50 /var/log/unattended-upgrades/unattended-upgrades.log
+sudo unattended-upgrade --dry-run --debug 2>&1 | grep -A6 'Allowed origins'
+```
+
+**Einmalig auf der bestehenden VM**: cloud-init installiert die Dateien erst beim
+nächsten Neuaufbau (`custom_data` wird ignoriert, siehe `terraform/vm.tf`). Erst
+ausführen, nachdem das Sonntags-Update den Commit gezogen hat — kein eigenes `git pull`
+vorab, sonst sieht der nächste Update-Lauf keine Änderung und lässt gemergte
+Container-Bumps liegen:
+```bash
+sudo install -m 0644 /opt/dpv/scripts/apt/52dpv-unattended-upgrades /etc/apt/apt.conf.d/
+sudo install -D -m 0644 /opt/dpv/scripts/systemd/apt-daily-upgrade.timer.d/10-dpv-schedule.conf /etc/systemd/system/apt-daily-upgrade.timer.d/10-dpv-schedule.conf
+sudo cp /opt/dpv/scripts/systemd/dpv-reboot-if-required.{service,timer} /etc/systemd/system/
+sudo systemctl daemon-reload && sudo systemctl restart apt-daily-upgrade.timer
+sudo systemctl enable --now dpv-reboot-if-required.timer
+```
+
 ## Repo-Struktur
 
 ```
 bootstrap/    einmaliger Storage Account fürs Terraform-Remote-State (eigenes State)
 terraform/    eigentliche Infrastruktur (VM, Platten, Netzwerk, Key Vault, Backup, Monitoring)
 compose/      Docker-Compose-Definitionen + Caddyfile, laufen auf der VM
-scripts/      cloud-init-Template, Secret-Fetch-Skript, pgBackRest-Config-Template, Backup-Cron, Update-Skript + systemd-Units
+scripts/      cloud-init-Template, Secret-Fetch-Skript, pgBackRest-Config-Template, Backup-Cron, Update-Skript + systemd-Units, apt-Config für OS-Updates
 ```

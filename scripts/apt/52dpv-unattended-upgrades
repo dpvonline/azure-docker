@@ -1,0 +1,39 @@
+// Installed to /etc/apt/apt.conf.d/ by cloud-init (see
+// scripts/cloud-init.yaml.tftpl). Extends Ubuntu's own 50unattended-upgrades,
+// which on its own only installs security updates (plus Ubuntu Pro ESM): this
+// adds the regular -updates pocket and the two third-party repos cloud-init
+// sets up, so the OS and everything installed on the host update by
+// themselves. Containers are not covered here — they update through Renovate
+// and scripts/update-containers.sh.
+//
+// When this runs is set in scripts/systemd/apt-daily-upgrade.timer.d/.
+
+APT::Periodic::Update-Package-Lists "1";
+APT::Periodic::Unattended-Upgrade "1";
+
+Unattended-Upgrade::Origins-Pattern {
+  "origin=${distro_id},archive=${distro_codename}-updates";
+  // Docker Engine + Compose plugin. A new dockerd restarts every container
+  // (restart: unless-stopped brings them back) — a few minutes at night,
+  // most of it Confluence starting up again.
+  "origin=Docker,archive=${distro_codename}";
+  // Azure CLI, which boot.sh needs for the Key Vault secrets.
+  "origin=azure-cli ${distro_codename},archive=${distro_codename}";
+};
+
+// Without these, unattended-upgrades skips any package whose update would ask
+// about a locally changed config file — indefinitely, without telling anyone.
+// confold keeps the local version, the same answer a manual upgrade would give.
+Dpkg::Options {
+  "--force-confdef";
+  "--force-confold";
+};
+
+// Kernel updates only take effect after a reboot: Livepatch is not available
+// on ARM64 before Ubuntu 26.04 (see MIGRATION.md). Updates still install every
+// night, but the reboot they ask for (/run/reboot-required) waits for Sunday
+// morning — scripts/systemd/dpv-reboot-if-required.{service,timer} — so the
+// stack goes down at most once a week, in the same window as the container
+// update. The price: a kernel fix can sit installed but inactive for up to a
+// week.
+Unattended-Upgrade::Automatic-Reboot "false";
