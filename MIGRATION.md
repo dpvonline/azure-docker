@@ -921,6 +921,40 @@ Stürzt es weiter ab: Core-Dumps aktivieren und die Stelle bestimmen.
 Nebenbefund: Am 27.10. war Postgres eine Stunde lang voll (236 abgelehnte
 Verbindungen, Standard 100). Seitdem `max_connections=200`.
 
+**Datenabgleich am 28.10.** Alle Dateien von Lightsail sind auf der VM, keine fehlt;
+12 wurden seit dem Cutover auf der VM geändert. Gegen die Datenbank geprüft: 4
+Papierkorb-Einträge ohne Datei wurden entfernt, 94 verwaiste `.part`-Dateien
+abgebrochener Uploads (291 MB) gelöscht.
+
+**SSO: seit 28.10. `user_oidc` statt `oidc_login`.** Umgestellt mit
+[`nc-sso.sh`](scripts/nextcloud-migration/nc-sso.sh), das vorher Gruppen,
+Mitgliedschaften, Kontingent und E-Mail sichert (`/root/sso/snapshot-*`). Zurück geht es
+mit `nc-sso.sh to-oidc-login`, `oidc_login` bleibt dafür installiert. Der Provider
+`DPV` nutzt denselben Keycloak-Client `nextcloud` und dessen Secret:
+
+```
+$O user_oidc:provider DPV --clientid=nextcloud --clientsecret='<Secret>' \
+  --discoveryuri=https://auth.dpvonline.de/realms/DPV/.well-known/openid-configuration \
+  --scope='openid profile email' --unique-uid=0 \
+  --mapping-uid=preferred_username --mapping-display-name=nickname \
+  --mapping-email=email --mapping-quota=nextcloudquota --mapping-groups=roles \
+  --group-provisioning=1 --group-whitelist-regex='/^(?!admin$)/' --send-id-token-hint=1
+$O config:system:set user_oidc enrich_login_id_token_with_userinfo --type=boolean --value=true
+```
+
+- `--unique-uid=0` und `soft_auto_provision` (Standard) übernehmen die bestehenden
+  Konten mit ihrer ID; `oc_user_oidc` bleibt deshalb leer.
+- Gruppen kommen bei jedem Login aus `roles`. Was dort fehlt, entfernt `user_oidc` —
+  außer `admin`, die bleibt lokal (Whitelist). Daran hängen die Gruppenordner, deshalb
+  in den ersten Tagen `nc-sso.sh diff` gegen die Momentaufnahme; `restore … --apply`
+  stellt Mitgliedschaften wieder her.
+- In Keycloak ist zusätzlich `https://cloud.dpvonline.de/apps/user_oidc/code` als
+  Redirect-URI eingetragen.
+- `/login` leitet direkt zu Keycloak (`allow_multiple_user_backends=0`), die lokale
+  Anmeldung bleibt unter `/login?direct=1` erreichbar.
+- Der Desktop-Client öffnet zum Anmelden den Browser und landet nicht mehr auf der
+  Nextcloud-Passwortmaske.
+
 ### Vorbereitung
 
 - **Mindestens einen Tag vorher bei IONOS** die TTL von `cloud.` und `office.dpvonline.de`
@@ -965,6 +999,9 @@ beide aus dem eingefrorenen Stand.
   - `docker rm -f nextcloud-mariadb`, `/data/apps/nextcloud-mariadb`,
     `/root/config.php.before-pgsql.*`
   - Keycloak-Client `nextcloud-test`
+  - `occ app:remove oidc_login`, die `oidc_login_*`-Werte aus `config.php` und die
+    alte Redirect-URI `/apps/oidc_login/oidc` im Keycloak-Client; `/root/sso` und
+    `/root/verify` auf der VM
 - Beim Abschalten von Lightsail **auch beide EFS löschen** (Nutzerdaten und Backups,
   zusammen >300 GB) — sie hängen nicht an der Instanz und kosten allein weiter. Das
   EFS hat ein eigenes AWS-Backup; dessen Aufbewahrung vorher prüfen.
@@ -1144,7 +1181,7 @@ Kein Zeitdruck, alles nach dem letzten Cutover.
 - **Nextcloud weiter hochziehen**, 33 → 34 → 35, ein Major pro Schritt; vorher prüfen,
   ob alle Apps die neue Version unterstützen (Stand 24.09.: ja, für beide). Auf der VM
   ist das ein Renovate-PR plus Pre-Update-Backup, statt Handarbeit auf Lightsail.
-- **Auf `user_oidc` umstellen**, falls die Probe in Phase 3 gut ausgeht.
+- *Erledigt am 28.10.:* auf `user_oidc` umgestellt (Phase 4).
 - **`notify_push`** (Client-Push): entlastet den Server bei vielen Desktop-Clients,
   die sonst regelmäßig nach Änderungen fragen. Optional das Talk-Hochleistungs-Backend.
 - *Erledigt mit dem AKS-Abriss:* `terraform/dns.tf` ist aufgeräumt, die Zone
@@ -1159,13 +1196,9 @@ Kein Zeitdruck, alles nach dem letzten Cutover.
 
 ## Offene Fragen
 
-Die Fragen aus der Planung sind beantwortet (Versionen, Größen, SMB: siehe Phase 1 und
-Phase 3). Offen bleibt:
-
-| Frage | Gebraucht für | Wie herausfinden |
-|---|---|---|
-| Ersetzt `user_oidc` das bisherige `oidc_login`? | Phase 4 oder 5 | Probe in Phase 3 |
-| Warum landet der Desktop-Client nach dem Keycloak-Login auf der Passwortmaske? | Phase 3 | URL der Seite beim Auftreten notieren |
+Keine. Die Fragen aus der Planung sind beantwortet (Versionen, Größen, SMB: siehe
+Phase 1 und Phase 3). `user_oidc` hat `oidc_login` ersetzt, und damit ist auch die
+Passwortmaske im Desktop-Client verschwunden (Phase 4).
 
 ## Kostenüberblick
 
