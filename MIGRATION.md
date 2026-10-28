@@ -977,22 +977,35 @@ beide aus dem eingefrorenen Stand.
 `rg-dpv-core` und gehört diesem Repo, `azure-infrastructure` ist archiviert. Das spart
 ~155 €/Monat. Keine Nutzer betroffen.
 
-### Stand 28.10.2026: Cluster gelöscht
+### Stand 28.10.2026: durchgeführt
 
 - Den Cluster hat Philip am 28.10. von Hand gelöscht. Mit ihm ist die Gruppe
   `MC_Infra_Kubernetes-Cluster_germanywestcentral` weg: Knoten, Load Balancer und alle
-  Platten, also auch das Postgres mit der Biber-Datenbank.
-- Übrig in `Infra`: Registry `biber`, Log Analytics `kubernetes-analytics`,
+  Platten, also auch das Postgres mit der Biber-Datenbank. Die Schritte unten liefen am
+  selben Tag.
+- Übrig waren in `Infra`: Registry `biber`, Log Analytics `kubernetes-analytics`,
   Prometheus-Workspace `kubernetes-monitoring` (mit der verwalteten Gruppe
   `MA_kubernetes-monitoring_…`), Datensammelregeln und -endpunkt, acht
   Prometheus-Regelgruppen (sechs davon aus dem Portal, nicht aus Terraform), VNet
   `k8s-network`, die beiden früheren Ingress-Adressen, ein Azure-Migrate-Projekt
-  `keycloak` und die Zone `scout-tools.de`.
-- **Im alten Repo kein `terraform apply` mehr.** Sein State ist vom 24.09. und kennt den
-  Cluster noch; die Konfiguration beschreibt ihn weiter, Terraform würde AKS also neu
-  aufbauen. Statt das Repo zurückzuschneiden, geht alles Übrige mit der Resource Group.
-- Seit Cutover B zeigt `office.dpvonline.de` auf die VM. Die früheren Ingress-Adressen
-  können also mit weg, ohne dass ein Name ins Leere zeigt.
+  `keycloak` und die Zone `scout-tools.de`. Bis auf die Zone ist alles mit der Gruppe
+  gelöscht; verwaiste Rollenzuweisungen blieben keine.
+- Das alte Repo wurde nicht zurückgeschnitten: Sein State war vom 24.09. und kannte den
+  Cluster noch, ein `terraform apply` hätte AKS neu aufgebaut. Stattdessen ging alles
+  Übrige mit der Resource Group. Seit Cutover B zeigt `office.dpvonline.de` auf die VM,
+  die früheren Ingress-Adressen konnten also mit weg, ohne dass ein Name ins Leere zeigt.
+- In der Zone stand außerdem ein A-Record `agent` auf `3.122.236.130` (AWS, antwortete
+  nicht), aus keinem der beiden Repos. Gelöscht: Ein Name auf eine freigegebene
+  Cloud-Adresse lässt sich von deren nächstem Inhaber übernehmen.
+- Die Zone liegt in `rg-dpv-core`, mit unveränderten Nameservern (`ns1-06` bis `ns4-06`)
+  und nur noch NS und SOA. Import und Tags mit #45.
+- Der Service Principal `Terraform` des alten Repos (Contributor und User Access
+  Administrator auf der Subscription) ist gelöscht; sein einziges Secret war das aus der
+  alten `variables.tfvars`. `azure-infrastructure` ist archiviert.
+- **Offen:** Die lokalen Dateien aus Schritt 6 löschen, vorher Confluence-Lizenz und
+  SMTP-Passwort aus der alten `variables.tfvars` sichern, falls sie sonst nirgends
+  stehen. Der Hinweis im README des alten Repos fehlt; zum Bearbeiten das Repo kurz
+  entarchivieren.
 
 ### Warum die Zone umzieht und nicht neu entsteht
 
@@ -1179,4 +1192,4 @@ Mehrwertsteuer auf die Karte.
 
 Bis zum Abriss am 28.10. kam der AKS mit ~155 €/Monat dazu (Knoten, IP, Prometheus in
 `Infra` und der `MC_`-Gruppe). Übrig bleibt davon nur die DNS-Zone `scout-tools.de`
-(~0,45 €), jetzt in `rg-dpv-core`; die Container Registry (~4,50 €) geht mit `Infra`.
+(~0,45 €), jetzt in `rg-dpv-core`; die Container Registry (~4,50 €) ging mit `Infra`.
