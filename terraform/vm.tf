@@ -103,9 +103,12 @@ resource "azurerm_linux_virtual_machine" "app" {
     disk_size_gb         = 48
   }
 
+  # Offer per release, SKU per architecture: ubuntu-24_04-lts and
+  # ubuntu-26_04-lts both have "server" (x86) and "server-arm64". Changing
+  # either rebuilds the VM — see UBUNTU_RELEASE in variables.tf.
   source_image_reference {
     publisher = "Canonical"
-    offer     = "ubuntu-24_04-lts"
+    offer     = "ubuntu-${replace(var.UBUNTU_RELEASE, ".", "_")}-lts"
     sku       = local.vm_arm64 ? "server-arm64" : "server"
     version   = "latest"
   }

@@ -45,6 +45,27 @@ variable "VM_SIZE" {
   default = "Standard_D4ps_v6"
 }
 
+# Ubuntu LTS release of the VM image. 26.04 is the first release with Livepatch
+# on ARM64 (24.04 shows it as n/a there), so kernel security fixes no longer
+# need a reboot to take effect.
+#
+# Changing this REBUILDS the VM, like switching architecture: a different image
+# means a new VM, while the data disks and the Azure Backup item stay. That is
+# why this is a variable rather than a literal in vm.tf — merging the change
+# alone does nothing; it takes `UBUNTU_RELEASE = "26.04"` in terraform.tfvars
+# during the maintenance window. MIGRATION.md ("Ubuntu 26.04 für Livepatch")
+# has the runbook; afterwards the default here moves to "26.04" as well, so a
+# tfvars without this line does not rebuild the VM back to 24.04.
+variable "UBUNTU_RELEASE" {
+  type    = string
+  default = "24.04"
+
+  validation {
+    condition     = contains(["24.04", "26.04"], var.UBUNTU_RELEASE)
+    error_message = "UBUNTU_RELEASE must be an LTS release with an image for both architectures: 24.04 or 26.04."
+  }
+}
+
 variable "POSTGRES_DISK_SIZE_GB" {
   type    = number
   default = 32
