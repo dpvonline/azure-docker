@@ -10,6 +10,10 @@ Type=oneshot
 # Never cut into an update run that started late (Persistent=true catching up
 # after downtime): skip this week instead, the next Sunday picks it up.
 ExecCondition=/bin/sh -c '! systemctl is-active --quiet dpv-update.service'
+# With Livepatch, a reboot that only kernel updates are waiting for waits for
+# the first Sunday of the month; everything else reboots this Sunday. No-op
+# without Livepatch (24.04 on ARM64). Exit 1 skips, like the line above.
+ExecCondition=/opt/dpv/scripts/reboot-due.sh
 # Into the journal, so it is clear afterwards what the reboot was for.
 ExecStartPre=-/bin/cat /run/reboot-required.pkgs
 ExecStart=/usr/bin/systemctl reboot

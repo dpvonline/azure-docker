@@ -37,7 +37,9 @@ Rollback), OS-Updates laufen nächtlich per `unattended-upgrades` — siehe unte
   Architektur ein anderes ist (`local.vm_arm64` in `terraform/vm.tf` leitet es aus
   `VM_SIZE` ab). Die Datenplatten überleben das; der Ablauf steht in
   [MIGRATION.md](MIGRATION.md) unter „Umzug auf ARM64". Innerhalb derselben
-  Architektur ist ein Größenwechsel ein Resize mit Neustart.
+  Architektur ist ein Größenwechsel ein Resize mit Neustart. Ein anderes Ubuntu-Release
+  (`UBUNTU_RELEASE`) baut die VM ebenfalls neu; der Umstieg auf 26.04, mit dem Livepatch
+  auf ARM64 erst verfügbar wird, steht dort unter „Ubuntu 26.04 für Livepatch".
 - **Drei Datenplatten**, alle unter `/data` (nicht unter `/mnt` — dort hängt der Azure-
   Agent auf Größen mit Temp-Disk den *flüchtigen* Datenträger ein, was ein bekannter
   Weg ist, persistente Daten zu verlieren; `D4ps_v6` hat gar keine Temp-Disk):
@@ -575,19 +577,26 @@ Konfiguriert in `scripts/apt/52dpv-unattended-upgrades` (ergänzt Ubuntus
   Confluence-Prune (04:30).
 - **Neustart**: höchstens einmal pro Woche, **sonntags 04:10 UTC** nach dem
   Container-Update, und nur wenn ein Update ihn verlangt (`/run/reboot-required`, vor
-  allem Kernel). Ubuntu Pro hilft hier nicht: Livepatch gibt es auf ARM64 erst ab Ubuntu
-  26.04, die VM läuft auf 24.04 — Pro liefert ihr nur ESM. Der Preis des
-  Wochenrhythmus: ein Kernel-Fix liegt bis zu einer Woche installiert, aber inaktiv
-  herum. Läuft um 04:10 noch ein Update-Lauf, fällt der Neustart für diese Woche aus.
-  Der Stack kommt danach von selbst wieder hoch: Docker wartet auf die Datenplatten,
-  `dpv-compose.service` startet `boot.sh`.
+  allem Kernel). Auf 24.04 hilft Ubuntu Pro hier nicht: Livepatch gibt es auf ARM64 erst
+  ab Ubuntu 26.04 — Pro liefert der VM nur ESM. Der Preis des Wochenrhythmus: ein
+  Kernel-Fix liegt bis zu einer Woche installiert, aber inaktiv herum. Läuft um 04:10
+  noch ein Update-Lauf, fällt der Neustart für diese Woche aus. Der Stack kommt danach
+  von selbst wieder hoch: Docker wartet auf die Datenplatten, `dpv-compose.service`
+  startet `boot.sh`.
+- **Mit Livepatch** (nach dem Umstieg auf 26.04, siehe [MIGRATION.md](MIGRATION.md))
+  wartet ein Neustart, den nur Kernel-Updates verlangen, bis zum **ersten Sonntag im
+  Monat**: Livepatch hat die schweren Lücken dann schon im laufenden Kernel geschlossen.
+  Das entscheidet `scripts/reboot-due.sh` als zweite `ExecCondition` von
+  `dpv-reboot-if-required.service`, anhand von
+  `pro api u.pro.security.status.reboot_required.v1`. Auf 24.04 ändert es nichts.
 - **Docker-Updates** starten den Daemon neu und damit alle Container — ein paar Minuten
   Ausfall in der Nacht, das meiste davon der Start von Confluence.
 - **Geänderte Konfigurationsdateien**: dpkg behält die lokale Version
   (`--force-confold`), statt das Paket stillschweigend dauerhaft auszulassen.
-- **Nicht enthalten**: Ubuntu-Release-Upgrades (24.04 → 26.04) bleiben Handarbeit. Der
-  Azure Monitor Agent aktualisiert sich über `automatic_upgrade_enabled`
-  (`terraform/monitoring.tf`), die Container über Renovate (oben).
+- **Nicht enthalten**: Ubuntu-Release-Upgrades (24.04 → 26.04) bleiben Handarbeit
+  (Neuaufbau, Runbook in MIGRATION.md). Der Azure Monitor Agent aktualisiert sich über
+  `automatic_upgrade_enabled` (`terraform/monitoring.tf`), die Container über Renovate
+  (oben).
 
 Kontrolle auf der VM:
 ```bash
@@ -610,6 +619,8 @@ sudo cp /opt/dpv/scripts/systemd/dpv-reboot-if-required.{service,timer} /etc/sys
 sudo systemctl daemon-reload && sudo systemctl restart apt-daily-upgrade.timer
 sudo systemctl enable --now dpv-reboot-if-required.timer
 ```
+Lief das schon, bevor `scripts/reboot-due.sh` dazukam, nur die Unit neu kopieren:
+`sudo cp /opt/dpv/scripts/systemd/dpv-reboot-if-required.service /etc/systemd/system/ && sudo systemctl daemon-reload`.
 
 ## Repo-Struktur
 

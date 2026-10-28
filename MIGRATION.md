@@ -1177,8 +1177,8 @@ endgültig; gebraucht wird von dem, was dann noch in `Infra` liegt, nichts mehr.
 
 **Ziel:** `vm-dpv-core` läuft auf Ubuntu 26.04 LTS (`resolute`) statt 24.04. Dann
 greift Livepatch aus dem schon angemeldeten Ubuntu Pro: Kernel-Sicherheitsfixes wirken
-ohne Neustart, und die VM muss für Kernel-Updates nur noch einmal im Monat neu starten
-statt jede Woche (Folgeänderung, siehe „Neustarts danach").
+ohne Neustart, und die VM startet für Kernel-Updates nur noch einmal im Monat neu statt
+jede Woche (siehe „Neustarts danach").
 **Wartungsfenster, Nutzer betroffen:** Anmeldung, Wiki, Nextcloud und Collabora sind
 30–45 Minuten weg. 1,5 Stunden ankündigen.
 
@@ -1285,9 +1285,10 @@ Rückfall sind das Full-Backup aus Schritt 1 und die Azure-Sicherung der Nacht.
 - Diesen PR mergen. Solange `UBUNTU_RELEASE` nicht in `terraform.tfvars` steht, ändert
   ein `terraform apply` nichts an der VM. `terraform plan` muss vorher **No changes**
   zeigen, sonst erst klären, was da ansteht.
-- Den PR mit den OS-Updates (`unattended-upgrades`, `dpv-reboot-if-required`) vorher
-  mergen. cloud-init klont das Repo beim Neuaufbau frisch, auf die VM kommt also, was an
-  dem Tag auf `main` ist.
+- Den PR mit den OS-Updates (#49: `unattended-upgrades`, `dpv-reboot-if-required`)
+  vorher mergen und auf der VM einrichten (README, „Automatische OS-Updates").
+  cloud-init klont das Repo beim Neuaufbau frisch, auf die VM kommt also, was an dem Tag
+  auf `main` ist.
 - **Handarbeit abgleichen**, auf der VM:
   ```
   ls /etc/systemd/system/ /etc/systemd/system/*.d /etc/cron.d /etc/sysctl.d
@@ -1430,7 +1431,8 @@ alles weiter, nur mit wöchentlichen Neustarts.
   muss durchlaufen, die alten Wiederherstellungspunkte müssen bleiben.
 - Monitoring: nach ~15 Minuten kommen in `log-dpv-core` wieder Zeilen an,
   `Perf | where TimeGenerated > ago(30m) | summarize by Computer, InstanceName`.
-- Timer und OS-Updates: `systemctl list-timers 'dpv-*' apt-daily-upgrade.timer`,
+- Timer und OS-Updates: `systemctl list-timers 'dpv-*' apt-daily-upgrade.timer`
+  (`dpv-reboot-if-required.timer` muss dabei sein),
   `/etc/cron.d/pgbackrest-full` existiert, und
   `sudo unattended-upgrade --dry-run --debug 2>&1 | grep -A6 'Allowed origins'` zeigt
   `resolute`.
@@ -1470,16 +1472,14 @@ statt `try`, damit Postgres bei fehlenden Huge Pages nicht startet, statt leise 
 weiterzulaufen) und die sysctl-Datei in cloud-init nachtragen. Nach dem Ausrollen:
 `$P psql -Atc "show huge_pages_status"` zeigt `on`. Hilft das nicht, Rollback A.
 
-### Neustarts danach (Folgeänderung)
+### Neustarts danach
 
-Noch nicht umgesetzt, weil die Grundlage noch nicht auf `main` ist: Der PR mit den
-OS-Updates (Branch `claude/improve-update-process-a80af9`) lässt `unattended-upgrades`
-Updates jede Nacht einspielen, ohne selbst neu zu starten (`Automatic-Reboot "false"`).
-Den Neustart, den ein Update verlangt, übernimmt `dpv-reboot-if-required.timer` am
-Sonntag um 04:10 UTC. Darauf setzt diese Änderung auf, sobald jener PR gemergt ist.
-
-**Vorschlag:** `dpv-reboot-if-required.service` bekommt eine zweite `ExecCondition`, die
-Ubuntu Pro fragt (`pro api u.pro.security.status.reboot_required.v1`):
+`unattended-upgrades` spielt Updates jede Nacht ein, ohne selbst neu zu starten
+(`Automatic-Reboot "false"` in `scripts/apt/52dpv-unattended-upgrades`). Den Neustart,
+den ein Update verlangt, übernimmt `dpv-reboot-if-required.timer` am Sonntag um
+04:10 UTC (README, „Automatische OS-Updates"). Vorher fragt die zweite `ExecCondition`
+der Unit `scripts/reboot-due.sh`, und das Skript fragt Ubuntu Pro
+(`pro api u.pro.security.status.reboot_required.v1`):
 
 - `yes-kernel-livepatches-applied`: Es warten nur Kernelpakete, und Livepatch hat den
   laufenden Kernel schon gepatcht und deckt ihn ab. Dann startet die VM nur am **ersten
@@ -1489,22 +1489,8 @@ Ubuntu Pro fragt (`pro api u.pro.security.status.reboot_required.v1`):
   ARM64, Pro nicht angemeldet, Kernel aus dem Patch-Fenster heraus, Risiko 2). Dasselbe
   gilt, wenn Pro gar nicht antwortet.
 
-```
-#!/usr/bin/env bash
-# scripts/reboot-due.sh — exit 0: reboot this Sunday, exit 1: skip (not a failure)
-set -uo pipefail
-[ "$(date -u +%d)" -le 7 ] && exit 0      # first Sunday of the month
-status=$(pro api u.pro.security.status.reboot_required.v1 2>/dev/null \
-  | jq -r '.data.attributes.reboot_required // empty' 2>/dev/null)
-[ "$status" = "yes-kernel-livepatches-applied" ] && exit 1
-exit 0
-```
-
-Dazu in der Unit `ExecCondition=/opt/dpv/scripts/reboot-due.sh`. Das Skript läuft aus
-dem Repo, Änderungen daran brauchen also keinen Neuaufbau. Die Unit-Änderung kommt wie
-jede andere zweimal rein: per cloud-init und einmal von Hand auf der laufenden VM. Nur
-auf `yes-kernel-livepatches-applied` ist Verlass: Laut Quellcode des Pro-Clients kommt
-es nur, wenn ausschließlich `linux-image*`/`linux-base` in
+Nur auf `yes-kernel-livepatches-applied` ist Verlass. Laut Quellcode des Pro-Clients
+kommt es nur, wenn ausschließlich `linux-image*`/`linux-base` in
 `/run/reboot-required.pkgs` stehen, Livepatch genau den laufenden Kernel kennt, dessen
 Status `applied` oder `nothing-to-apply` ist und er als `supported` gilt. Das Feld
 `livepatch_enabled_and_kernel_patched` ist dagegen lockerer berechnet und taugt nicht als
@@ -1514,7 +1500,16 @@ Monatlich statt gar nicht, weil Livepatch nur hohe und kritische Lücken abdeckt
 laufende Kernel im Patch-Fenster bleiben muss. Fällt der erste Sonntag aus, weil das
 Container-Update noch lief, wartet der Neustart bis zum nächsten Monat; das Fenster von
 13 Monaten verträgt das. Auf 24.04 ändert die Regel nichts, weil Livepatch dort `n/a` ist
-und die Antwort damit immer `yes`. Sie kann deshalb vor dem Umzug ausgerollt werden.
+und die Antwort damit immer `yes`. Sie kann deshalb schon vor dem Umzug auf die VM:
+die Unit einmal von Hand kopieren (README, „Automatische OS-Updates"). Der Neuaufbau
+bringt sie per cloud-init ohnehin mit.
+
+Kontrolle nach dem Umzug:
+
+```
+sudo /opt/dpv/scripts/reboot-due.sh; echo $?                   # 1, wenn nur Kernel wartet (ab dem 8. des Monats)
+journalctl -u dpv-reboot-if-required.service | tail             # "reboot waits for the first Sunday" bzw. "Rebooting"
+```
 
 ---
 
