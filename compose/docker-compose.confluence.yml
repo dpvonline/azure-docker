@@ -1,3 +1,9 @@
+# Logging to journald, see docker-compose.yml.
+x-logging: &logging
+  driver: journald
+  options:
+    tag: "{{.Name}}"
+
 services:
   confluence:
     # Pinned to exactly what runs on AKS today — `atlassian/confluence:latest`
@@ -6,6 +12,7 @@ services:
     # releases are not auto-merged for Confluence).
     image: atlassian/confluence:10.2.18
     restart: unless-stopped
+    logging: *logging
     depends_on:
       - postgres
     networks:
