@@ -1241,16 +1241,36 @@ Rückfall sind das Full-Backup aus Schritt 1 und die Azure-Sicherung der Nacht.
 
 ### Offene Risiken
 
-1. **Postgres unter Linux 7.0.** Ubuntu führt als bekanntes Problem, dass eine Änderung
-   in Linux 7.0 Durchsatz und Latenz von Postgres deutlich verschlechtern kann (Wegfall
-   von `PREEMPT_NONE`); Systeme mit Huge Pages sind nicht betroffen. Gemeldet wurde ein
-   halbierter Durchsatz auf einer großen Maschine unter Volllast. Bei 4 vCPU und der
-   Last hier ist wenig zu erwarten, belegt ist es nicht. Womöglich läuft die VM aber
-   schon darauf: `linux-azure` ist auch auf 24.04 bei 7.0 angekommen (`noble-updates`:
-   `7.0.0-1017.17~24.04.1`). Zeigt `uname -r` auf der VM heute schon `7.0.…`, ist das
-   Risiko längst im Betrieb und der Umzug ändert daran nichts. Sonst gilt: Unser Postgres
-   läuft ohne Huge Pages, deshalb gibt es eine Messung vorher und nachher, und
-   Rollback C schaltet Huge Pages ein.
+1. **Postgres unter Linux 7.0.** Ubuntu führt als bekanntes Problem, dass Linux 7.0
+   Durchsatz und Latenz von Postgres deutlich verschlechtern kann; Systeme mit Huge
+   Pages sind nicht betroffen. Ursache laut [LKML-Thread](https://lkml.iu.edu/hypermail/linux/kernel/2604.0/06945.html):
+   Beim Verdrängen eines Puffers (`StrategyGetBuffer`) hält Postgres einen Spinlock,
+   und mit 4-KB-Seiten fallen genau dort viele Page Faults an. Seit 7.0 gibt es kein
+   `PREEMPT_NONE` mehr, der Kernel unterbricht den Halter öfter, und die Wartenden
+   drehen leer. Gemessen wurde halber Durchsatz auf 96 vCPU (Graviton4, also auch
+   ARM64) mit 1024 Clients und ~95 GB `shared_buffers`.
+   - **Kernel:** Kein Fix gefunden. Der Patch, der `PREEMPT_NONE` zurückholen sollte,
+     wurde im Thread abgelehnt und ist nach allem Auffindbaren nicht gemergt. Die
+     Alternative der Kernel-Seite, die rseq-Zeitscheibenverlängerung, ist
+     standardmäßig aus, und Postgres nutzt sie nicht. Ubuntu führt das Problem weiter
+     ohne Kernel-Update.
+   - **Postgres-Update:** Ein neueres 18.x hilft nicht, denn an dieser Stelle wurde in
+     18.x nichts geändert (die ARM64-Spinlock-Verbesserung steckt schon in 18.0).
+     Postgres 19 entfernt diesen Spinlock (Commit `2c78940`, „Remove freelist, always
+     use clock-sweep"), erscheint aber erst am 19.11.2026, ist unter Linux 7.x nicht
+     gemessen und ein Major-Upgrade (`pg_upgrade`, Freigaben von Keycloak, Confluence,
+     Nextcloud). Ohne Huge Pages ist ein großer Puffer laut Andres Freund auch dort
+     „utterly terrible" (etwa ein Drittel des Durchsatzes). Kein Grund, 19 deswegen
+     vorzuziehen.
+   - **Hier:** `shared_buffers` steht auf dem Standard von 128 MB, bei 4 vCPU. Laut
+     Freund tritt das Problem „with a smaller buffer pool" nicht auf. Für so kleine
+     Maschinen gibt es aber keine Messung. Womöglich läuft die VM ohnehin schon darauf:
+     `linux-azure` ist auch auf 24.04 bei 7.0 angekommen (`noble-updates`:
+     `7.0.0-1017.17~24.04.1`). Zeigt `uname -r` heute schon `7.0.…`, ist das Risiko
+     längst im Betrieb, und der Umzug ändert daran nichts.
+   - **Gegenmittel** sind Huge Pages (Rollback C). Sie wirken unabhängig von
+     Postgres-Version und Kernel und lassen sich auch vor dem Umzug einschalten. Ohne
+     sie gibt es die Messung vorher und nachher.
 2. **Kernelwechsel innerhalb von 26.04.** `linux-azure` zieht während eines LTS auf
    neuere Kernel nach: bei 24.04 von 6.8 bis heute auf 7.0, während
    `linux-azure-lts-24.04` bei 6.8 blieb. Bei 26.04 voraussichtlich ab 26.04.2 im Februar
