@@ -37,9 +37,7 @@ Rollback) — siehe unten.
   Architektur ein anderes ist (`local.vm_arm64` in `terraform/vm.tf` leitet es aus
   `VM_SIZE` ab). Die Datenplatten überleben das; der Ablauf steht in
   [MIGRATION.md](MIGRATION.md) unter „Umzug auf ARM64". Innerhalb derselben
-  Architektur ist ein Größenwechsel ein Resize mit Neustart. Ein anderes Ubuntu-Release
-  (`UBUNTU_RELEASE`) baut die VM ebenfalls neu; der Umstieg auf 26.04, mit dem Livepatch
-  auf ARM64 erst verfügbar wird, steht dort unter „Ubuntu 26.04 für Livepatch".
+  Architektur ist ein Größenwechsel ein Resize mit Neustart.
 - **Drei Datenplatten**, alle unter `/data` (nicht unter `/mnt` — dort hängt der Azure-
   Agent auf Größen mit Temp-Disk den *flüchtigen* Datenträger ein, was ein bekannter
   Weg ist, persistente Daten zu verlieren; `D4ps_v6` hat gar keine Temp-Disk):

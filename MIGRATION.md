@@ -1177,8 +1177,8 @@ endgültig; gebraucht wird von dem, was dann noch in `Infra` liegt, nichts mehr.
 
 **Ziel:** `vm-dpv-core` läuft auf Ubuntu 26.04 LTS (`resolute`) statt 24.04. Dann
 greift Livepatch aus dem schon angemeldeten Ubuntu Pro: Kernel-Sicherheitsfixes wirken
-ohne Neustart, und die VM startet für Kernel-Updates nur noch einmal im Monat neu statt
-jede Woche (siehe „Neustarts danach").
+ohne Neustart, und die VM muss für Kernel-Updates nur noch einmal im Monat neu starten
+statt jede Woche (Folgeänderung, siehe „Neustarts danach").
 **Wartungsfenster, Nutzer betroffen:** Anmeldung, Wiki, Nextcloud und Collabora sind
 30–45 Minuten weg. 1,5 Stunden ankündigen.
 
@@ -1470,40 +1470,51 @@ statt `try`, damit Postgres bei fehlenden Huge Pages nicht startet, statt leise 
 weiterzulaufen) und die sysctl-Datei in cloud-init nachtragen. Nach dem Ausrollen:
 `$P psql -Atc "show huge_pages_status"` zeigt `on`. Hilft das nicht, Rollback A.
 
-### Neustarts danach
+### Neustarts danach (Folgeänderung)
 
-`unattended-upgrades` spielt Kernel-Updates weiter jede Nacht ein
-(`scripts/apt/52dpv-unattended-upgrades`, `Automatic-Reboot "false"`). Den Neustart, den
-sie verlangen, übernimmt `dpv-reboot-if-required.timer` am Sonntag um 04:10 UTC. Ein
-Drop-in (`scripts/systemd/dpv-reboot-if-required.service.d/`) lässt den Dienst vorher
-`scripts/reboot-due.sh` fragen, und das fragt Ubuntu Pro
-(`pro api u.pro.security.status.reboot_required.v1`):
+Noch nicht umgesetzt, weil die Grundlage noch nicht auf `main` ist: Der PR mit den
+OS-Updates (Branch `claude/improve-update-process-a80af9`) lässt `unattended-upgrades`
+Updates jede Nacht einspielen, ohne selbst neu zu starten (`Automatic-Reboot "false"`).
+Den Neustart, den ein Update verlangt, übernimmt `dpv-reboot-if-required.timer` am
+Sonntag um 04:10 UTC. Darauf setzt diese Änderung auf, sobald jener PR gemergt ist.
 
-- `yes-kernel-livepatches-applied` — nur Kernelpakete warten, und Livepatch hat den
-  laufenden Kernel schon gepatcht und deckt ihn ab: Neustart nur am **ersten Sonntag im
-  Monat**.
-- `yes` — ein anderes Paket verlangt den Neustart, oder Livepatch deckt den Kernel nicht
-  ab (24.04 auf ARM64, Pro nicht angemeldet, Kernel aus dem Patch-Fenster heraus,
-  Risiko 2), oder Pro antwortet gar nicht: Neustart an diesem Sonntag, wie bisher.
+**Vorschlag:** `dpv-reboot-if-required.service` bekommt eine zweite `ExecCondition`, die
+Ubuntu Pro fragt (`pro api u.pro.security.status.reboot_required.v1`):
+
+- `yes-kernel-livepatches-applied`: Es warten nur Kernelpakete, und Livepatch hat den
+  laufenden Kernel schon gepatcht und deckt ihn ab. Dann startet die VM nur am **ersten
+  Sonntag im Monat** neu.
+- Alles andere startet an diesem Sonntag neu, wie bisher. Das ist `yes`, wenn ein
+  anderes Paket den Neustart verlangt oder Livepatch den Kernel nicht abdeckt (24.04 auf
+  ARM64, Pro nicht angemeldet, Kernel aus dem Patch-Fenster heraus, Risiko 2). Dasselbe
+  gilt, wenn Pro gar nicht antwortet.
+
+```
+#!/usr/bin/env bash
+# scripts/reboot-due.sh — exit 0: reboot this Sunday, exit 1: skip (not a failure)
+set -uo pipefail
+[ "$(date -u +%d)" -le 7 ] && exit 0      # first Sunday of the month
+status=$(pro api u.pro.security.status.reboot_required.v1 2>/dev/null \
+  | jq -r '.data.attributes.reboot_required // empty' 2>/dev/null)
+[ "$status" = "yes-kernel-livepatches-applied" ] && exit 1
+exit 0
+```
+
+Dazu in der Unit `ExecCondition=/opt/dpv/scripts/reboot-due.sh`. Das Skript läuft aus
+dem Repo, Änderungen daran brauchen also keinen Neuaufbau. Die Unit-Änderung kommt wie
+jede andere zweimal rein: per cloud-init und einmal von Hand auf der laufenden VM. Nur
+auf `yes-kernel-livepatches-applied` ist Verlass: Laut Quellcode des Pro-Clients kommt
+es nur, wenn ausschließlich `linux-image*`/`linux-base` in
+`/run/reboot-required.pkgs` stehen, Livepatch genau den laufenden Kernel kennt, dessen
+Status `applied` oder `nothing-to-apply` ist und er als `supported` gilt. Das Feld
+`livepatch_enabled_and_kernel_patched` ist dagegen lockerer berechnet und taugt nicht als
+Bedingung.
 
 Monatlich statt gar nicht, weil Livepatch nur hohe und kritische Lücken abdeckt und der
 laufende Kernel im Patch-Fenster bleiben muss. Fällt der erste Sonntag aus, weil das
 Container-Update noch lief, wartet der Neustart bis zum nächsten Monat; das Fenster von
-13 Monaten verträgt das. Auf 24.04 ändert die Regel nichts, Livepatch ist dort `n/a` und
-die Antwort damit immer `yes`. Sie kann deshalb vor dem Umzug gemergt werden, auch vor
-dem PR mit `dpv-reboot-if-required` (ein Drop-in ohne Unit ignoriert systemd).
-
-Einmalig auf der bestehenden VM, sobald beide PRs gemergt sind und das Sonntags-Update
-den Stand gezogen hat (kein eigenes `git pull` vorab, siehe README, „Automatische
-OS-Updates"):
-
-```
-sudo install -D -m 0644 /opt/dpv/scripts/systemd/dpv-reboot-if-required.service.d/10-dpv-livepatch.conf \
-  /etc/systemd/system/dpv-reboot-if-required.service.d/10-dpv-livepatch.conf
-sudo systemctl daemon-reload
-systemctl cat dpv-reboot-if-required.service | grep ExecCondition   # zwei Zeilen
-sudo /opt/dpv/scripts/reboot-due.sh; echo $?                        # auf 24.04: 0
-```
+13 Monaten verträgt das. Auf 24.04 ändert die Regel nichts, weil Livepatch dort `n/a` ist
+und die Antwort damit immer `yes`. Sie kann deshalb vor dem Umzug ausgerollt werden.
 
 ---
 

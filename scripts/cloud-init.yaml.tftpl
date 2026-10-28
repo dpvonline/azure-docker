@@ -163,11 +163,6 @@ runcmd:
   # is deployed: the script exits early when the table does not exist.
   - cp /opt/dpv/scripts/systemd/dpv-confluence-prune.service /etc/systemd/system/dpv-confluence-prune.service
   - cp /opt/dpv/scripts/systemd/dpv-confluence-prune.timer /etc/systemd/system/dpv-confluence-prune.timer
-  # With Livepatch, a reboot only for kernel updates waits for the first Sunday
-  # of the month, see scripts/reboot-due.sh. Harmless where
-  # dpv-reboot-if-required.service is not installed: systemd ignores drop-ins
-  # for units that do not exist.
-  - install -D -m 0644 /opt/dpv/scripts/systemd/dpv-reboot-if-required.service.d/10-dpv-livepatch.conf /etc/systemd/system/dpv-reboot-if-required.service.d/10-dpv-livepatch.conf
   # Docker starts the containers itself after a reboot (restart:
   # unless-stopped), without going through boot.sh — this keeps it from doing
   # so while a data disk is missing. Takes effect from the next boot; on this
