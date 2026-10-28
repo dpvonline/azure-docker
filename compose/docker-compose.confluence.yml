@@ -4,7 +4,7 @@ services:
     # there resolved to 10.2.18. A migration is not the moment for a version
     # jump; Renovate takes over from here (see renovate.json for why minor
     # releases are not auto-merged for Confluence).
-    image: atlassian/confluence:10.2.18
+    image: atlassian/confluence:11.0.0
     restart: unless-stopped
     depends_on:
       - postgres
