@@ -119,12 +119,6 @@ variable "GITHUB_REPO_SSH_URL" {
   description = "SSH clone URL of this repo, e.g. git@github.com:org/azure-docker.git — the VM clones it at boot via the deploy key"
 }
 
-variable "OLD_REPO_RESOURCE_GROUP" {
-  type        = string
-  default     = "Infra"
-  description = "Resource group of the existing azure-infrastructure repo, where the scout-tools.de DNS zone lives. Goes away once the production cutover moves off that test domain (see MIGRATION.md, phase 5)."
-}
-
 variable "TAGS" {
   type = map(string)
   default = {
