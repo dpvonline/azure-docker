@@ -437,7 +437,8 @@ als Datenplatte. Eine Garantie für den Tag des Umzugs ist das nicht (siehe Roll
   eingehängt. Seitdem wartet cloud-init bis zu 30 Minuten, `boot.sh` startet den
   Stack nur mit allen drei Mounts, und Docker selbst startet erst, wenn sie da sind
   (`scripts/systemd/docker.service.d/`).
-- Livepatch gibt es auf ARM64 nicht (`pro status`: `n/a`), ESM läuft.
+- Livepatch gibt es auf ARM64 nicht (`pro status`: `n/a`), ESM läuft. Livepatch für ARM64
+  kam erst mit Ubuntu 26.04, siehe „Ubuntu 26.04 für Livepatch".
 
 ### Wer merkt was
 
@@ -1169,6 +1170,365 @@ mit `az role assignment delete --ids …` entfernen.
 
 Bis Schritt 4 steht `Infra` noch, die Zone lässt sich zurückverschieben. Schritt 5 ist
 endgültig; gebraucht wird von dem, was dann noch in `Infra` liegt, nichts mehr.
+
+---
+
+## Zwischenschritt — Ubuntu 26.04 für Livepatch
+
+**Ziel:** `vm-dpv-core` läuft auf Ubuntu 26.04 LTS (`resolute`) statt 24.04. Dann
+greift Livepatch aus dem schon angemeldeten Ubuntu Pro: Kernel-Sicherheitsfixes wirken
+ohne Neustart, und die VM startet für Kernel-Updates nur noch einmal im Monat neu statt
+jede Woche (siehe „Neustarts danach").
+**Wartungsfenster, Nutzer betroffen:** Anmeldung, Wiki, Nextcloud und Collabora sind
+30–45 Minuten weg. 1,5 Stunden ankündigen.
+
+**Warum 26.04:** Livepatch für ARM64 gibt es erst ab Ubuntu 26.04. Für ältere Releases
+fehlte Kernel und Werkzeugen die nötige Unterstützung
+([Ankündigung vom 23.06.2026](https://canonical.com/blog/canonical-announces-live-kernel-patching-for-arm64)),
+deshalb zeigt `pro status` seit dem Umzug auf ARM64 bei Livepatch `n/a`. Laut
+[Kernel-Tabelle](https://ubuntu.com/security/livepatch/docs/client/reference/platform/supported-kernels/)
+ist für 26.04 auf arm64 der Kernel 7.0 (GA) abgedeckt, in den Varianten aws, **azure**,
+fips, gcp, generic, gke, ibm, lowlatency und oracle. Damit ist `linux-azure` abgedeckt,
+den das Azure-Image mitbringt (in `resolute-updates` derzeit `7.0.0-1019`). Für 24.04
+hat die Tabelle keine einzige arm64-Zeile.
+
+Was Livepatch nicht leistet: Es behebt nur Lücken der Stufen hoch und kritisch, und
+jeder Kernel-Build bekommt Patches nur 9–13 Monate ab seinem Erscheinen (7.0 auf 26.04:
+13). Neustarts in einen neuen Kernel bleiben nötig, nur seltener und geplant.
+
+### Neuaufbau statt `do-release-upgrade`
+
+Beides ginge: `do-release-upgrade` bietet 24.04 → 26.04.1 seit dem 29.09.2026 an.
+Empfehlung: **Neuaufbau** per Terraform mit dem 26.04-Image, nach dem Muster von „Umzug
+auf ARM64".
+
+| | Neuaufbau (`UBUNTU_RELEASE = "26.04"`) | `do-release-upgrade` auf der VM |
+|---|---|---|
+| Rollback | `UBUNTU_RELEASE = "24.04"`, `apply`, wie Rollback A beim ARM64-Umzug | nur über eine OS-Platte aus Azure Backup, an Terraform vorbei, nie geprobt |
+| cloud-init auf 26.04 | läuft jetzt einmal durch, im geplanten Fenster | läuft zum ersten Mal beim nächsten Neuaufbau, also womöglich im Ernstfall |
+| Terraform | `vm.tf` beschreibt die VM, wie sie ist | `vm.tf` sagt weiter 24.04; das Image dort umzustellen baut die VM doch neu |
+| Docker, Azure CLI | kommen gleich aus den `resolute`-Quellen | Das Upgrade schaltet beide Fremdquellen ab. Danach von Hand umstellen, bis dahin läuft Docker mit `noble`-Paketen |
+| Ergebnis | wie eine Neuinstallation (chrony, Rust-Coreutils, sudo-rs, frische Konfiguration) | Mischstand aus alter Konfiguration und neuen Paketen |
+| Verloren | alles auf der OS-Platte: Host-Keys, Managed Identity, Zertifikate, Docker-Images, Logs, Handarbeit außerhalb von cloud-init | nichts |
+| Ausfall | 30–45 Min. (24.09.: 40) | ähnlich, Upgrade plus Neustart |
+
+Den Ausschlag geben die ersten beiden Zeilen. Der Neuaufbau ist der Weg, den das Repo
+für Änderungen an der VM vorsieht (Kommentar am Ende von `azurerm_linux_virtual_machine`
+in `terraform/vm.tf`). Er ist erprobt, und sein Rollback ist derselbe Vorgang rückwärts.
+Die Plattenpanne vom 24.09. ist behoben: cloud-init wartet bis zu 30 Minuten auf die
+Platten, und weder `boot.sh` noch Docker starten den Stack ohne alle drei Mounts. Was
+verloren geht, ist bekannt. Zertifikate und Images kommen von selbst wieder, Logs
+sichert Schritt 1, Handarbeit erfasst die Vorbereitung.
+
+Für Postgres ändert sich diesmal praktisch nichts. Architektur, Image `postgres:18`,
+glibc im Container (und damit die Sortierung) und Datenverzeichnis bleiben gleich, und
+selbst der Kernel ist schon heute 7.0 (Risiko 1). Dumps und `amcheck` wie beim ARM64-Umzug braucht es deshalb nicht.
+Rückfall sind das Full-Backup aus Schritt 1 und die Azure-Sicherung der Nacht.
+
+### Kompatibilität (geprüft am 28.10.2026)
+
+| Was | Ergebnis |
+|---|---|
+| Image | `Canonical:ubuntu-26_04-lts:server-arm64` in `germanywestcentral`, neueste Version `26.04.202610210`. Gen2, dieselben Features wie das 24.04-Image (Trusted Launch möglich, SCSI und NVMe), kein Marketplace-Plan. Nur das Offer ändert sich, die SKU bleibt `server-arm64`. |
+| Livepatch | Kernel 7.0 GA, Variante `azure`, siehe oben. `pro attach` in cloud-init schaltet Livepatch mit ein, wo es verfügbar ist; cloud-init braucht dafür keine Änderung. |
+| Docker-Repo | `download.docker.com/linux/ubuntu` hat `resolute` für arm64, mit denselben Versionen wie `noble` (`docker-ce` 29.9.2, Compose 5.6.1, containerd 2.4.2). `$VERSION_CODENAME` in `cloud-init.yaml.tftpl` liefert `resolute`. |
+| Azure CLI | `InstallAzureCLIDeb` nimmt den eigenen Codenamen, wenn er unter `packages.microsoft.com/repos/azure-cli/dists/` steht, sonst still `jammy`. `resolute` steht dort, mit `azure-cli` 2.91 für arm64. |
+| unattended-upgrades | Die Muster in `scripts/apt/52dpv-unattended-upgrades` nutzen `${distro_codename}`. Die Release-Dateien beider Fremdquellen (`Origin: Docker` bzw. `Origin: azure-cli resolute`, `Suite: resolute`) passen dazu. |
+| Azure Monitor Agent | Ubuntu 26.04 LTS steht in der [Liste](https://learn.microsoft.com/en-us/azure/azure-monitor/agents/azure-monitor-agent-supported-operating-systems), „also supported on ARM64-based machines". Die Extension baut Terraform beim Neuaufbau ohnehin neu. |
+| Azure Backup | Die [Matrix](https://learn.microsoft.com/en-us/azure/backup/backup-support-matrix-iaas) verweist auf die [von Azure unterstützten Distributionen](https://learn.microsoft.com/en-us/azure/virtual-machines/linux/endorsed-distros), und dort steht Ubuntu 26.04 LTS. Enhanced Policy mit Premium SSD v2 bleibt unterstützt. ARM64 erwähnt die Matrix nicht, gesichert wird die ARM64-VM aber seit dem 24.09. |
+| cloud-init | Version 26.1, laut Release Notes keine Änderungen für Azure. Das Template hat nichts Release-Spezifisches; ein Rollback auf 24.04 nutzt dasselbe. |
+| Sonst in 26.04 | `sudo` ist sudo-rs (das bisherige heißt `sudo.ws`). Die Coreutils kommen aus Rust (uutils), außer `cp`, `mv` und `rm`; die Skripte nutzen nur gängige Optionen von `install`, `seq`, `chown` und `ln`. Zurück zu GNU: `sudo apt install coreutils-from-gnu coreutils-from-uutils- --allow-remove-essential`. systemd 259 kennt nur noch cgroup v2 (nutzt 24.04 schon), OpenSSH 10.2 hat kein DSA mehr (die VM nutzt ed25519), Python 3.14, chrony statt timesyncd. |
+
+### Offene Risiken
+
+1. **Postgres unter Linux 7.0 — kein Risiko des Umzugs.** Ubuntu führt als bekanntes Problem, dass Linux 7.0
+   Durchsatz und Latenz von Postgres deutlich verschlechtern kann; Systeme mit Huge
+   Pages sind nicht betroffen. Ursache laut [LKML-Thread](https://lkml.iu.edu/hypermail/linux/kernel/2604.0/06945.html):
+   Beim Verdrängen eines Puffers (`StrategyGetBuffer`) hält Postgres einen Spinlock,
+   und mit 4-KB-Seiten fallen genau dort viele Page Faults an. Seit 7.0 gibt es kein
+   `PREEMPT_NONE` mehr, der Kernel unterbricht den Halter öfter, und die Wartenden
+   drehen leer. Gemessen wurde halber Durchsatz auf 96 vCPU (Graviton4, also auch
+   ARM64) mit 1024 Clients und ~95 GB `shared_buffers`.
+   - **Kernel:** Kein Fix gefunden. Der Patch, der `PREEMPT_NONE` zurückholen sollte,
+     wurde im Thread abgelehnt und ist nach allem Auffindbaren nicht gemergt. Die
+     Alternative der Kernel-Seite, die rseq-Zeitscheibenverlängerung, ist
+     standardmäßig aus, und Postgres nutzt sie nicht. Ubuntu führt das Problem weiter
+     ohne Kernel-Update.
+   - **Postgres-Update:** Ein neueres 18.x hilft nicht, denn an dieser Stelle wurde in
+     18.x nichts geändert (die ARM64-Spinlock-Verbesserung steckt schon in 18.0).
+     Postgres 19 entfernt diesen Spinlock (Commit `2c78940`, „Remove freelist, always
+     use clock-sweep"), erscheint aber erst am 19.11.2026, ist unter Linux 7.x nicht
+     gemessen und ein Major-Upgrade (`pg_upgrade`, Freigaben von Keycloak, Confluence,
+     Nextcloud). Ohne Huge Pages ist ein großer Puffer laut Andres Freund auch dort
+     „utterly terrible" (etwa ein Drittel des Durchsatzes). Kein Grund, 19 deswegen
+     vorzuziehen.
+   - **Hier:** Die VM läuft schon auf 7.0. `uname -r` zeigte am 28.10.
+     `7.0.0-1017-azure`, denn `linux-azure` ist auch auf 24.04 bei 7.0 angekommen. Der
+     Umzug ändert daran nichts, ein Rollback auf 24.04 auch nicht. `shared_buffers`
+     steht auf dem Standard von 128 MB, bei 4 vCPU. Laut Freund tritt das Problem „with
+     a smaller buffer pool" nicht auf; für so kleine Maschinen gibt es aber keine
+     Messung. Ob es hier durchschlägt, zeigt der Abschnitt „Huge Pages für Postgres".
+   - **Gegenmittel** sind Huge Pages, als eigene Änderung, unabhängig vom Umzug (siehe
+     „Huge Pages für Postgres"). Sie wirken unabhängig von Postgres-Version und Kernel.
+2. **Kernelwechsel innerhalb von 26.04.** `linux-azure` zieht während eines LTS auf
+   neuere Kernel nach: bei 24.04 von 6.8 bis heute auf 7.0, während
+   `linux-azure-lts-24.04` bei 6.8 blieb. Bei 26.04 voraussichtlich ab 26.04.2 im Februar
+   2027. Ob Livepatch diese Kernel auf arm64 abdeckt, steht noch nicht in Canonicals
+   Tabelle; auf x86 tut es das, mit 9 statt 13 Monaten. Fehlt die Abdeckung, startet die
+   VM wieder wöchentlich neu (siehe „Neustarts danach") — sicher, nur häufiger.
+   Gegenmittel: auf den GA-Kernel festlegen, also `linux-azure-lts-26.04` installieren
+   und die übrigen `linux-*azure`-Metapakete entfernen (`dpkg -l 'linux-*azure*'`). Auf
+   26.04 sind heute beide derselbe Kernel. Im Februar 2027 prüfen.
+3. **Plätze im Ubuntu-Pro-Abo.** Das kostenlose Personal-Abo deckt fünf Maschinen ab,
+   und jeder Neuaufbau ist für Ubuntu Pro eine neue. Schritt 2 meldet die alte VM ab;
+   vorher im [Dashboard](https://ubuntu.com/pro/dashboard) nachsehen, wie viele
+   eingetragen sind. Scheitert `pro attach`, steht es in
+   `/var/log/dpv-boot-warnings.log`, und es gibt kein Livepatch.
+4. **Handarbeit auf der VM.** Was je von Hand eingerichtet wurde und nicht in cloud-init
+   steht, ist nach dem Neuaufbau weg. Die Vorbereitung gleicht das einmal ab.
+5. **Azure Backup auf 26.04.** Laut Liste unterstützt, belegt erst durch den ersten Job
+   (Schritt 9). Scheitert er, gilt dasselbe wie beim ARM64-Umzug: nichts löschen.
+6. **Keine Hardware.** Terraform löscht die alte VM, bevor es die neue anlegt. Gibt es in
+   Zone 1 gerade keine `D4ps_v6`, hilft auch der Rollback auf 24.04 nicht (Rollback A).
+
+### Wer merkt was
+
+| Zeitraum | Wiki | Anmeldung (Keycloak) | Nextcloud, Collabora |
+|---|---|---|---|
+| Schritt 2 bis 4 | weg | **weg** | weg; Desktop-Clients synchronisieren danach von selbst weiter |
+| Schritt 5 bis 7 | erreichbar, wird geprüft | erreichbar, wird geprüft | erreichbar, wird geprüft |
+| ab Schritt 8 | normal | normal | normal |
+
+### Vorbereitung
+
+- Diesen PR mergen. Solange `UBUNTU_RELEASE` nicht in `terraform.tfvars` steht, ändert
+  ein `terraform apply` nichts an der VM. `terraform plan` muss vorher **No changes**
+  zeigen, sonst erst klären, was da ansteht.
+- Den PR mit den OS-Updates (#49: `unattended-upgrades`, `dpv-reboot-if-required`)
+  vorher mergen und auf der VM einrichten (README, „Automatische OS-Updates").
+  cloud-init klont das Repo beim Neuaufbau frisch, auf die VM kommt also, was an dem Tag
+  auf `main` ist.
+- **Handarbeit abgleichen**, auf der VM:
+  ```
+  ls /etc/systemd/system/ /etc/systemd/system/*.d /etc/cron.d /etc/sysctl.d
+  ls /etc/apt/apt.conf.d /etc/apt/sources.list.d
+  sudo crontab -l; sudo docker volume ls; sudo ls -la /root
+  ```
+  Jeder Eintrag muss aus cloud-init, von Ubuntu oder aus einem Paket stammen; was nicht,
+  in cloud-init nachtragen oder bewusst fallen lassen. Unter `/root` liegen womöglich
+  noch Reste aus früheren Schritten (etwa `pgdata-leeres-cluster-os-platte`,
+  `config.php.before-pgsql.*`), die mit der OS-Platte verschwinden.
+- Kontingent für eine ARM64-Ausweichgröße (Rollback A) prüfen:
+  `az vm list-usage -l germanywestcentral -o table | grep -iE "ps.*family|regional"`.
+  Am 28.10.: `Dpsv6` 4 von 350, `Bpsv2` 0 von 65, regional 4 von 13 vCPUs.
+- Fenster ankündigen. **Nicht** zwischen 00:30 und 04:30 UTC (OS-Updates, Azure Backup,
+  pgBackRest, Sonntags-Update mit Neustart, Confluence-Prune), und nicht am Tag nach
+  einem Major-Update aus Renovate.
+- Eigene IP in `ADMIN_IP_CIDRS`, SSH auf die VM geht.
+
+### Schritte
+
+| # | Schritt | Dauer | Rollback |
+|---|---|---|---|
+| 1 | Full-Backup, Logs sichern | 5 Min. | – |
+| 2 | Stack stoppen, Zahlen und `pg_control` notieren, `pro detach` — **Ausfall beginnt** | 3 Min. | `pro attach`, `systemctl restart dpv-compose.service` |
+| 3 | `UBUNTU_RELEASE = "26.04"`, `terraform apply` | 5–10 Min. | **A** |
+| 4 | Host-Key, cloud-init, **alle drei Mounts**, Release prüfen | 10–30 Min. | A |
+| 5 | Postgres prüfen | 5 Min. | A |
+| 6 | pgBackRest prüfen, Full-Backup | 5 Min. | |
+| 7 | Dienste prüfen | 15 Min. | A |
+| 8 | Livepatch prüfen | 5 Min. | – |
+| 9 | Freigeben, Azure Backup, Monitoring, Timer | 15 Min. | wie A, auch danach |
+
+**1 — Sicherung.** Auf der alten VM:
+
+```
+sudo /opt/dpv/scripts/pgbackrest-full-backup.sh
+sudo install -d -m 700 /data/apps/pre-2604
+sudo cp -a /var/log/dpv-update.log /var/log/dpv-boot-warnings.log \
+  /var/log/unattended-upgrades /data/apps/pre-2604/
+dpkg -l | sudo tee /data/apps/pre-2604/dpkg-24.04.txt >/dev/null
+```
+
+Fehlende Logs meldet `cp` und überspringt sie. Zweiter Rückfall ist die Azure-Sicherung
+von 01:00:
+`az backup recoverypoint list -g rg-dpv-core -v rsv-dpv-core --backup-management-type AzureIaasVM -c vm-dpv-core -i vm-dpv-core --query "[0].properties.recoveryPointTime" -o tsv`.
+
+**2 — Stoppen.** Erst alles außer Postgres, dann zählen, dann Postgres. So ändern sich
+die Zahlen bis Schritt 5 nicht mehr:
+
+```
+cd /opt/dpv/compose
+P="sudo docker compose exec -T --user postgres postgres"
+sudo docker compose stop $(sudo docker compose config --services | grep -vx postgres)
+$P psql -d confluence -Atc "select (select count(*) from content), (select count(*) from bodycontent)"
+$P psql -d keycloak -Atc "select count(*) from user_entity"
+$P psql -d nextcloud -Atc "select (select count(*) from oc_filecache), (select count(*) from oc_share)"
+sudo docker compose stop -t 120 postgres
+sudo docker compose run --rm --no-deps --user postgres --entrypoint pg_controldata \
+  postgres /var/lib/postgresql/data/pgdata | grep -iE "system identifier|cluster state"
+sudo pro detach --assume-yes
+```
+
+`Database cluster state` muss `shut down` sein. Systemkennung und die fünf Zahlen
+notieren. `pro detach` gibt den Platz im Abo frei (Risiko 3), die neue VM meldet sich in
+cloud-init selbst an. Zurück vor Schritt 3: `pro attach` mit dem Token aus Key Vault (wie
+in cloud-init), dann `sudo systemctl restart dpv-compose.service`.
+
+**3 — Neuaufbau.** Lokal in `terraform/terraform.tfvars` `UBUNTU_RELEASE = "26.04"`, dann
+`terraform plan`. Erwartet: **8 to add, 0 to change, 8 to destroy**. Ersetzt werden die
+VM (`offer "ubuntu-24_04-lts" -> "ubuntu-26_04-lts"`), die drei Plattenanbindungen, der
+Monitoring-Agent mit seiner DCR-Zuordnung und die zwei Rollenzuweisungen (Key Vault,
+pgBackRest-Speicher). **Nicht** im Plan dürfen stehen: `azurerm_managed_disk.*`,
+`azurerm_backup_protected_vm.app`, irgendetwas aus Key Vault. Passt das,
+`terraform apply`.
+
+**4 — Host-Key und cloud-init.** Genau wie beim ARM64-Umzug, Schritt 4: Fingerabdruck
+über `az vm run-command`, `cloud-init status --wait --long`, `dpv-boot-warnings.log`,
+alle drei Mounts. Die Hinweise dort zu fehlenden Platten und zu `Forbidden` gelten
+unverändert. Zusätzlich:
+
+```
+. /etc/os-release; echo "$VERSION_ID $VERSION_CODENAME"   # 26.04 resolute
+uname -mr                                                 # 7.0.0-…-azure aarch64
+cat /etc/apt/sources.list.d/docker.list                   # … resolute stable
+apt-cache policy docker-ce azure-cli | grep -E "^[a-z]|Installed"
+```
+
+**5 — Postgres.**
+
+```
+cd /opt/dpv/compose
+P="sudo docker compose exec -T --user postgres postgres"
+sudo docker compose ps
+sudo docker compose logs postgres | grep -iE "error|fatal|panic"
+$P pg_controldata /var/lib/postgresql/data/pgdata | grep -i "system identifier"
+```
+
+Dieselbe Systemkennung wie in Schritt 2, keine Fehler. Die Zahlen aus Schritt 2
+wiederholen: gleich, bei Nextcloud höchstens ein paar mehr, weil Clients sofort wieder
+synchronisieren, sobald Caddy läuft.
+
+**6 — pgBackRest.** Wie beim ARM64-Umzug, Schritt 6: Die neue Identität braucht ein paar
+Minuten, bis ihre Rollenzuweisung wirkt. `stanza-create` meldet die bestehende Stanza als
+gültig, dann `check` und `pgbackrest-full-backup.sh`.
+
+**7 — Dienste.** Keycloak und Wiki wie beim ARM64-Umzug, Schritt 7 (IPv4 und IPv6,
+Zertifikate, Login, Seite mit Anhang, Suche, Confluence-Log). Nextcloud und Collabora
+nach Phase 3, „Verifikation", in kurz: SSO-Login von einem Gerät ohne Session, eine
+Datei hoch- und herunterladen, ein Dokument in Collabora öffnen und speichern,
+`curl -4`/`-6 https://cloud.dpvonline.de/status.php`, Nextcloud-Log ohne `level ≥ 3`.
+
+**8 — Livepatch.**
+
+```
+pro status                                     # livepatch: enabled
+sudo canonical-livepatch status --verbose      # Kernel supported, Patches applied/nothing-to-apply
+pro api u.pro.security.status.reboot_required.v1 | jq .data.attributes
+```
+
+Steht Livepatch auf `disabled`: `sudo pro enable livepatch`. Ist Pro gar nicht
+angemeldet: `dpv-boot-warnings.log` lesen, meist sind die Plätze voll (Risiko 3);
+Dashboard aufräumen, dann `pro attach` mit dem Token aus Key Vault. Ohne Livepatch läuft
+alles weiter, nur mit wöchentlichen Neustarts.
+
+**9 — Freigeben und Nacharbeiten.** Wartungsende ankündigen. Danach, ohne Zeitdruck:
+
+- Azure Backup gegen die neue VM wie beim ARM64-Umzug, Schritt 8: `backup-now`, der Job
+  muss durchlaufen, die alten Wiederherstellungspunkte müssen bleiben.
+- Monitoring: nach ~15 Minuten kommen in `log-dpv-core` wieder Zeilen an,
+  `Perf | where TimeGenerated > ago(30m) | summarize by Computer, InstanceName`.
+- Timer und OS-Updates: `systemctl list-timers 'dpv-*' apt-daily-upgrade.timer`
+  (`dpv-reboot-if-required.timer` muss dabei sein),
+  `/etc/cron.d/pgbackrest-full` existiert, und
+  `sudo unattended-upgrade --dry-run --debug 2>&1 | grep -A6 'Allowed origins'` zeigt
+  `resolute`.
+- Im Repo: Default von `UBUNTU_RELEASE` in `terraform/variables.tf` auf `"26.04"`, die
+  Zeile aus `terraform.tfvars` nehmen, `terraform plan` zeigt **No changes**. README
+  („Ubuntu 24.04 LTS" unter Architektur) und hier einen „Stand"-Absatz nachtragen.
+- Nach einer unauffälligen Woche `/data/apps/pre-2604` löschen.
+
+### Rollback
+
+**A — `apply` scheitert, die VM kommt nicht sauber hoch, oder etwas läuft auf 26.04
+nicht.** In `terraform.tfvars` `UBUNTU_RELEASE = "24.04"`, `terraform apply`: Terraform
+baut die VM mit dem 24.04-Image und demselben cloud-init neu, Schritte 4–7 wie oben. Die
+Daten sind unverändert. Das gilt auch nach Schritt 9: Das Datenverzeichnis ist unter
+beiden Releases dasselbe, ein Zurück kostet also nur einen weiteren Ausfall, keine Daten.
+Bei `AllocationFailed`/`ZonalAllocationFailed` gibt es in Zone 1 gerade keine
+`D4ps_v6`, und der Rollback hilft nicht, weil er dieselbe Größe braucht. Dann
+vorübergehend eine andere ARM64-Größe mit demselben Image, etwa
+`VM_SIZE = "Standard_B4ps_v2"` (Kontingent siehe Vorbereitung), und später zurück; das
+ist ein Resize mit Neustart, kein Neuaufbau.
+
+### Huge Pages für Postgres (unabhängig vom Umzug)
+
+Gegenmittel zu Risiko 1, auf 24.04 genauso wie auf 26.04, denn beide laufen auf Linux 7.0.
+Ob es nötig ist: Wartende auf einen umkämpften Spinlock zeigt Postgres als Wartezustand
+`SpinDelay`. Unter Last, etwa werktags am Vormittag, eine Minute lang zählen:
+
+```
+cd /opt/dpv/compose
+P="sudo docker compose exec -T --user postgres postgres"
+for i in $(seq 60); do
+  $P psql -Atc "select count(*) from pg_stat_activity where wait_event = 'SpinDelay'"
+  sleep 1
+done | sort -n | uniq -c
+```
+
+Fast nur Nullen heißt, dass es nicht durchschlägt. Tauchen regelmäßig Werte über null
+auf, die nötige Zahl Huge Pages abfragen und mit etwas Luft reservieren:
+
+```
+$P psql -Atc "show shared_memory_size_in_huge_pages"     # z. B. 80
+echo "vm.nr_hugepages = 100" | sudo tee /etc/sysctl.d/60-dpv-postgres-hugepages.conf
+sudo sysctl --system && grep HugePages_Total /proc/meminfo
+```
+
+Dann im Repo `"-c", "huge_pages=on"` in `compose/docker-compose.postgres.yml` eintragen
+(`on` statt `try`, damit Postgres bei fehlenden Huge Pages nicht startet, statt leise
+ohne weiterzulaufen) und die sysctl-Datei in cloud-init nachtragen. Nach dem Ausrollen
+zeigt `$P psql -Atc "show huge_pages_status"` den Wert `on`. Wird `shared_buffers`
+später größer, die Zahl der Huge Pages mit anheben.
+
+### Neustarts danach
+
+`unattended-upgrades` spielt Updates jede Nacht ein, ohne selbst neu zu starten
+(`Automatic-Reboot "false"` in `scripts/apt/52dpv-unattended-upgrades`). Den Neustart,
+den ein Update verlangt, übernimmt `dpv-reboot-if-required.timer` am Sonntag um
+04:10 UTC (README, „Automatische OS-Updates"). Vorher fragt die zweite `ExecCondition`
+der Unit `scripts/reboot-due.sh`, und das Skript fragt Ubuntu Pro
+(`pro api u.pro.security.status.reboot_required.v1`):
+
+- `yes-kernel-livepatches-applied`: Es warten nur Kernelpakete, und Livepatch hat den
+  laufenden Kernel schon gepatcht und deckt ihn ab. Dann startet die VM nur am **ersten
+  Sonntag im Monat** neu.
+- Alles andere startet an diesem Sonntag neu, wie bisher. Das ist `yes`, wenn ein
+  anderes Paket den Neustart verlangt oder Livepatch den Kernel nicht abdeckt (24.04 auf
+  ARM64, Pro nicht angemeldet, Kernel aus dem Patch-Fenster heraus, Risiko 2). Dasselbe
+  gilt, wenn Pro gar nicht antwortet.
+
+Nur auf `yes-kernel-livepatches-applied` ist Verlass. Laut Quellcode des Pro-Clients
+kommt es nur, wenn ausschließlich `linux-image*`/`linux-base` in
+`/run/reboot-required.pkgs` stehen, Livepatch genau den laufenden Kernel kennt, dessen
+Status `applied` oder `nothing-to-apply` ist und er als `supported` gilt. Das Feld
+`livepatch_enabled_and_kernel_patched` ist dagegen lockerer berechnet und taugt nicht als
+Bedingung.
+
+Monatlich statt gar nicht, weil Livepatch nur hohe und kritische Lücken abdeckt und der
+laufende Kernel im Patch-Fenster bleiben muss. Fällt der erste Sonntag aus, weil das
+Container-Update noch lief, wartet der Neustart bis zum nächsten Monat; das Fenster von
+13 Monaten verträgt das. Auf 24.04 ändert die Regel nichts, weil Livepatch dort `n/a` ist
+und die Antwort damit immer `yes`. Sie kann deshalb schon vor dem Umzug auf die VM:
+die Unit einmal von Hand kopieren (README, „Automatische OS-Updates"). Der Neuaufbau
+bringt sie per cloud-init ohnehin mit.
+
+Kontrolle nach dem Umzug:
+
+```
+sudo /opt/dpv/scripts/reboot-due.sh; echo $?                   # 1, wenn nur Kernel wartet (ab dem 8. des Monats)
+journalctl -u dpv-reboot-if-required.service | tail             # "reboot waits for the first Sunday" bzw. "Rebooting"
+```
 
 ---
 
