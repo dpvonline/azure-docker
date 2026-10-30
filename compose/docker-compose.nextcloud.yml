@@ -72,7 +72,7 @@ services:
   collabora:
     # Set up fresh — the container on Lightsail was never reachable (its DNS
     # name pointed at AKS), and Collabora keeps no data of its own.
-    image: collabora/code:26.04.5.1.1
+    image: collabora/code:26.04.5.2.1
     restart: unless-stopped
     networks:
       - dpv
