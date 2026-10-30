@@ -3,6 +3,12 @@
 # installation — fetch-secrets.sh checks for config/config.php. Started on an
 # empty directory, the image would present the public setup wizard instead.
 
+# Logging to journald, see docker-compose.yml.
+x-logging: &logging
+  driver: journald
+  options:
+    tag: "{{.Name}}"
+
 services:
   nextcloud:
     # The plain upstream image, exactly as on Lightsail — the custom Dockerfile in
@@ -12,6 +18,7 @@ services:
     # every installed app has to support the new one first.
     image: nextcloud:33.0.10-apache
     restart: unless-stopped
+    logging: *logging
     depends_on:
       - postgres
       - redis
@@ -46,6 +53,7 @@ services:
   nextcloud-cron:
     image: nextcloud:33.0.10-apache
     restart: unless-stopped
+    logging: *logging
     profiles: ["nextcloud-live"]
     depends_on:
       - nextcloud
@@ -65,6 +73,7 @@ services:
     # no persistence and no volume.
     image: redis:8.10-alpine
     restart: unless-stopped
+    logging: *logging
     command: ["redis-server", "--save", "", "--appendonly", "no"]
     networks:
       - dpv
@@ -74,6 +83,7 @@ services:
     # name pointed at AKS), and Collabora keeps no data of its own.
     image: collabora/code:26.04.5.2.1
     restart: unless-stopped
+    logging: *logging
     networks:
       - dpv
     cap_add:

@@ -611,11 +611,53 @@ sudo systemctl daemon-reload && sudo systemctl restart apt-daily-upgrade.timer
 sudo systemctl enable --now dpv-reboot-if-required.timer
 ```
 
+## Container-Logs (30 Tage)
+
+Alle Container schreiben ins systemd-Journal der VM (`x-logging` in jeder
+`compose/docker-compose*.yml`), journald hebt die Logs 30 Tage auf
+(`scripts/journald/10-dpv-retention.conf`). Vorher lagen sie in Dockers json-Dateien,
+und die verschwinden mit dem Container — bei jedem Update, jeder geänderten
+Konfiguration. Bei der PHP2Shell-Prüfung im Oktober 2026 fehlten deshalb genau die Tage,
+um die es ging. Caddy schreibt außerdem ein Access-Log für alle vier Seiten (vorher nur
+fehlgeschlagene Anfragen): Client-IP, Methode, Pfad, Status, Header. `Authorization` und
+`Cookie` schwärzt Caddy selbst.
+
+- **Wie lange**: 30 Tage, gelöscht tageweise. Höchstens 5 GB, und journald lässt auf `/`
+  mindestens 10 GB frei, damit Logs allein nie den Platten-Alert (unter 20 % frei)
+  auslösen. Wird eine der Grenzen vorher erreicht, fallen die ältesten Tage früher weg —
+  `journalctl --disk-usage` zeigt den Stand.
+- **Neuer Dienst**: braucht `logging: *logging`, sonst landen seine Logs wieder in einer
+  json-Datei, die mit dem Container verschwindet.
+- **Datenschutz**: Die Logs enthalten IP-Adressen und Benutzernamen. Zweck (Sicherheit
+  des Betriebs) und Frist gehören ins Verarbeitungsverzeichnis. Azure Backup sichert die
+  OS-Platte mit, dort bleiben sie so lange wie die Sicherung (bis zu 6 Monate, siehe
+  „Backup-Ebene 2").
+
+Abfragen auf der VM (`docker logs` geht weiterhin, zeigt aber nur den laufenden Container):
+```bash
+sudo journalctl -t dpv-core-nextcloud-1 --since "2026-11-01 10:00" --until "2026-11-01 11:00"
+sudo journalctl -t dpv-core-caddy-1 --since today -o cat | jq -c 'select(.status >= 500) | [(.ts|todate), .request.client_ip, .request.method, .request.uri, .status]'
+sudo journalctl --disk-usage
+```
+
+**Umstellung**: Der Sonntags-Update-Lauf, der diesen Commit zieht, erstellt einmal alle
+Container neu (ihre `logging`-Konfiguration hat sich geändert), auch Postgres und
+Confluence — ein paar Minuten Ausfall um 03:30 UTC. Caddy liest dabei das neue
+Caddyfile. Die bisherigen json-Logs verschwinden mit den alten Containern.
+
+**Einmalig auf der bestehenden VM**, nachdem das Sonntags-Update den Commit gezogen hat
+(gleicher Grund wie oben). Bis dahin gelten Ubuntus Voreinstellungen: kein Zeitlimit,
+höchstens 4 GB.
+```bash
+sudo install -D -m 0644 /opt/dpv/scripts/journald/10-dpv-retention.conf /etc/systemd/journald.conf.d/10-dpv-retention.conf
+sudo systemctl restart systemd-journald
+```
+
 ## Repo-Struktur
 
 ```
 bootstrap/    einmaliger Storage Account fürs Terraform-Remote-State (eigenes State)
 terraform/    eigentliche Infrastruktur (VM, Platten, Netzwerk, Key Vault, Backup, Monitoring)
 compose/      Docker-Compose-Definitionen + Caddyfile, laufen auf der VM
-scripts/      cloud-init-Template, Secret-Fetch-Skript, pgBackRest-Config-Template, Backup-Cron, Update-Skript + systemd-Units, apt-Config für OS-Updates
+scripts/      cloud-init-Template, Secret-Fetch-Skript, pgBackRest-Config-Template, Backup-Cron, Update-Skript + systemd-Units, apt-Config für OS-Updates, journald-Config für Container-Logs
 ```
