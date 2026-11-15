@@ -34,6 +34,8 @@ services:
       ATL_FORCE_CFG_UPDATE: "false"
       JVM_MINIMUM_MEMORY: 1024m
       JVM_MAXIMUM_MEMORY: 3072m
+    # 3 GB heap + metaspace + the Synchrony child JVM (~0.4 GB) + native memory.
+    mem_limit: 4608m
     volumes:
       - /data/apps/confluence:/var/atlassian/application-data/confluence
     # Port 8090 is intentionally not published — Caddy reaches it over the

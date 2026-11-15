@@ -59,6 +59,38 @@ moved {
   to   = azurerm_monitor_metric_alert.cpu_credits[0]
 }
 
+# --- Available memory (platform metric, no agent) ----------------------------
+
+# On 2026-11-11 free memory fell from ~10 GB to under 0.2 GB within minutes and
+# the OOM killer took down every container; nothing alerted because only disks
+# and CPU credits were watched. Normal "available" on this 16 GB VM is ~10 GB
+# (page cache counts as available), so below 2 GB is already abnormal. The
+# metric comes from the hypervisor, so it keeps reporting even when the guest
+# is thrashing. Window and frequency are short because the whole incident
+# lasted about 20 minutes.
+resource "azurerm_monitor_metric_alert" "memory_low" {
+  name                = "alert-dpv-memory-low"
+  resource_group_name = azurerm_resource_group.core.name
+  scopes              = [azurerm_linux_virtual_machine.app.id]
+  description         = "Available memory on vm-dpv-core is under 2 GB — the OOM killer is close or already active. Check `sudo journalctl -k | grep -i oom` and `docker stats`."
+  severity            = 1
+  frequency           = "PT5M"
+  window_size         = "PT5M"
+  tags                = var.TAGS
+
+  criteria {
+    metric_namespace = "Microsoft.Compute/virtualMachines"
+    metric_name      = "Available Memory Bytes"
+    aggregation      = "Average"
+    operator         = "LessThan"
+    threshold        = 2000000000
+  }
+
+  action {
+    action_group_id = azurerm_monitor_action_group.ops.id
+  }
+}
+
 # --- Disk fill level (needs the guest agent) ---------------------------------
 
 resource "azurerm_log_analytics_workspace" "core" {

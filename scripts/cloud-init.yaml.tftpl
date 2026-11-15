@@ -9,6 +9,7 @@ packages:
   - ca-certificates
   - gnupg
   - jq
+  - systemd-zram-generator
 
 write_files:
   - path: /opt/staging/pgbackrest.conf
@@ -180,7 +181,12 @@ runcmd:
   - install -D -m 0644 /opt/dpv/scripts/journald/10-dpv-retention.conf /etc/systemd/journald.conf.d/10-dpv-retention.conf
   - systemctl restart systemd-journald
 
+  # zram swap, see the file for why. The generator turns the config into a
+  # systemd-zram-setup@zram0 unit on daemon-reload.
+  - install -D -m 0644 /opt/dpv/scripts/systemd/zram-generator.conf /etc/systemd/zram-generator.conf
+
   - systemctl daemon-reload
+  - systemctl start systemd-zram-setup@zram0.service
   - systemctl enable --now dpv-compose.service
   - systemctl enable --now dpv-update.timer
   - systemctl enable --now dpv-confluence-prune.timer
