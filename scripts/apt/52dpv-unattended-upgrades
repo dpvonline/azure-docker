@@ -35,5 +35,7 @@ Dpkg::Options {
 // morning — scripts/systemd/dpv-reboot-if-required.{service,timer} — so the
 // stack goes down at most once a week, in the same window as the container
 // update. The price: a kernel fix can sit installed but inactive for up to a
-// week.
+// week. Once Livepatch covers the running kernel (Ubuntu 26.04), a reboot only
+// for kernel updates waits for the first Sunday of the month instead — see
+// scripts/reboot-due.sh.
 Unattended-Upgrade::Automatic-Reboot "false";

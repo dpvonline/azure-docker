@@ -103,6 +103,13 @@ resource "azurerm_linux_virtual_machine" "app" {
     disk_size_gb         = 48
   }
 
+  # Offer per release, SKU per architecture: ubuntu-24_04-lts and
+  # ubuntu-26_04-lts both have "server" (x86) and "server-arm64". A different
+  # SKU rebuilds the VM. A different offer does not (ignore_changes below), it
+  # only decides what the next rebuild gets: releases are upgraded in place
+  # with do-release-upgrade. Keep the offer at the release the VM runs, so a
+  # rebuild brings back the same one — it moves to ubuntu-26_04-lts right after
+  # the upgrade in MIGRATION.md ("Ubuntu 26.04 für Livepatch").
   source_image_reference {
     publisher = "Canonical"
     offer     = "ubuntu-24_04-lts"
@@ -141,8 +148,13 @@ resource "azurerm_linux_virtual_machine" "app" {
   #   terraform apply -replace=azurerm_linux_virtual_machine.app
   # A rebuild is an outage of everything on this VM, so MIGRATION.md
   # ("Umzug auf ARM64") has the runbook, including the Azure Backup side.
+  #
+  # The offer is ignored for the same reason. Ubuntu releases are upgraded in
+  # place (do-release-upgrade), and Azure keeps reporting the image the VM was
+  # created from, so after an upgrade the offer in the config and the one in
+  # Azure differ for good — without this, the next apply would rebuild the VM.
   lifecycle {
-    ignore_changes = [custom_data]
+    ignore_changes = [custom_data, source_image_reference[0].offer]
   }
 }
 
