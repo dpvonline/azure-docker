@@ -543,6 +543,27 @@ Schedule/Logik brauchen dadurch keinen VM-Rebuild mehr, nur diese initiale Einf�
 brauchte noch einen (weil `cloud-init.yaml.tftpl`s `runcmd` sich geändert hat, um die
 Dateien einmalig zu kopieren).
 
+### Aufräumen: Fake-Registrierungen in Keycloak
+
+`scripts/keycloak-prune-unverified.sh`, täglich 05:00 UTC durch `dpv-keycloak-prune.timer`,
+löscht im Realm `DPV` alle Nutzer, deren E-Mail-Adresse nach 48 Stunden noch nicht
+bestätigt ist (Bot-Registrierungen). Es läuft über die Admin-API (`kcadm`), nicht über
+die Datenbank. Ohne Argument ist es ein **Trockenlauf**, der Timer ruft es mit
+`--delete` auf; mehr als 500 Treffer pro Lauf brechen ab.
+
+**Vor dem ersten echten Lauf** Trockenlauf machen und die Zahl prüfen — aus AKS
+migrierte Mitglieder mit unbestätigter E-Mail wären nicht von Bots zu unterscheiden:
+```bash
+sudo /opt/dpv/scripts/keycloak-prune-unverified.sh
+# ggf. nur Konten ab einem Stichtag (ms seit 1970) erfassen:
+sudo SINCE_EPOCH_MS=1760000000000 /opt/dpv/scripts/keycloak-prune-unverified.sh
+```
+Bei Altlasten `SINCE_EPOCH_MS` per `Environment=` in `dpv-keycloak-prune.service` setzen.
+Auf der laufenden VM den Timer wie im Abschnitt zu cloud-init-Änderungen (Beispiel
+oben) von Hand installieren, mit `<name>` = `dpv-keycloak-prune`.
+
+Vorbeugend gehören ins Realm: reCAPTCHA im Registrierungs-Flow und „Verify email".
+
 ## Repo-Struktur
 
 ```
