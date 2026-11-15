@@ -12,6 +12,10 @@
 #     the "no changes since last run" early exit), and
 #   - by cloud-init on first boot, instead of individual cp/install lines.
 #
+# NAMING RULE: every file this script installs must have "dpv" in its file
+# name (dpv-*.service, 10-dpv-*.conf, 52dpv-*), in one of the directories the
+# orphan cleanup below scans. That is how the cleanup recognises our files; a
+# file without it would never be removed after it is dropped from the repo.
 # To add a host file: add one sync_file line and its activation below. The list
 # is deliberately explicit (no globbing over scripts/systemd): the repo also
 # holds files that must not land in /etc.
@@ -154,9 +158,10 @@ sync_file apt/52dpv-unattended-upgrades /etc/apt/apt.conf.d/52dpv-unattended-upg
 # Journal retention for the container logs.
 sync_file journald/10-dpv-retention.conf /etc/systemd/journald.conf.d/10-dpv-retention.conf && JOURNALD_CHANGED=1
 
-# zram swap. Only the generator turns this file into units, so the package must
-# be there before the daemon-reload below.
-sync_file systemd/zram-generator.conf /etc/systemd/zram-generator.conf && { NEED_RELOAD=1; ZRAM_CONF_CHANGED=1; }
+# zram swap, as a drop-in so that its name carries "dpv". Only the generator
+# turns it into units, so the package must be there before the daemon-reload
+# below.
+sync_file systemd/zram-generator.conf.d/10-dpv-zram.conf /etc/systemd/zram-generator.conf.d/10-dpv-zram.conf && { NEED_RELOAD=1; ZRAM_CONF_CHANGED=1; }
 
 # --- 1b. Remove orphans ---------------------------------------------------------
 # Same names the explicit list above uses, found by their "dpv" in the name.
@@ -167,6 +172,7 @@ for f in \
   "$ROOT"/etc/systemd/system/docker.service.d/*dpv*.conf \
   "$ROOT"/etc/systemd/system/apt-daily-upgrade.timer.d/*dpv*.conf \
   "$ROOT"/etc/apt/apt.conf.d/*dpv* \
+  "$ROOT"/etc/systemd/zram-generator.conf.d/*dpv*.conf \
   "$ROOT"/etc/systemd/journald.conf.d/*dpv*; do
   [ -f "$f" ] || continue
   path="${f#"$ROOT"}"
@@ -190,6 +196,19 @@ for f in \
     warn "could not remove $path"
   fi
 done
+
+# Legacy: the zram config used to be installed as /etc/systemd/zram-generator.conf
+# (no "dpv" in the name, so the scan above cannot find it). The package ships
+# no file there, so it is ours. Delete this block once every host has run it.
+if [ -f "$ROOT/etc/systemd/zram-generator.conf" ]; then
+  if rm -f "$ROOT/etc/systemd/zram-generator.conf"; then
+    log "removed /etc/systemd/zram-generator.conf (moved to zram-generator.conf.d/10-dpv-zram.conf)"
+    CHANGED=$((CHANGED + 1))
+    NEED_RELOAD=1
+  else
+    warn "could not remove /etc/systemd/zram-generator.conf"
+  fi
+fi
 
 # --- 2. zram package ----------------------------------------------------------
 # cloud-init installs it on first boot; the existing VM got it by hand. Checked

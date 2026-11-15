@@ -264,7 +264,9 @@ committen.
    `scripts/apply-host-config.sh`, das cloud-init beim Neuaufbau und
    `update-containers.sh` bei jedem Lauf nach dem `git pull` aufruft (siehe „Rollout
    auf der VM"). Eine neue Datei braucht dort nur eine Zeile Quelle → Ziel und ggf.
-   ihren Aktivierungsschritt. Was `cloud-init.yaml.tftpl` selbst erzeugt (etwa
+   ihren Aktivierungsschritt. **Jede Datei muss „dpv“ im Namen tragen**
+   (`dpv-*.service`, `10-dpv-*.conf`, `52dpv-*`), sonst erkennt das Aufräumen sie nicht als
+   eigene Datei. Was `cloud-init.yaml.tftpl` selbst erzeugt (etwa
    `dpv-compose.service`, `boot.sh`, Terraform-Werte), greift dagegen nur bei einem
    Neuaufbau.
    Soll eine cloud-init-Änderung wirklich greifen, die VM bewusst neu bauen:
@@ -662,7 +664,7 @@ Container, die Maschine war rund 20 Minuten nicht erreichbar. Seitdem:
   dessen Container. Postgres und Caddy haben bewusst keins (Postgres bekommt, was übrig
   bleibt), aber `oom_score_adj: -500`, damit der OOM-Killer sie als Letzte trifft.
 - **zram-Swap**: komprimierter Swap im RAM, halbe RAM-Größe, zstd
-  (`scripts/systemd/zram-generator.conf`). Gibt dem Kernel Luft, ohne auf die OS-Platte
+  (`scripts/systemd/zram-generator.conf.d/10-dpv-zram.conf`). Gibt dem Kernel Luft, ohne auf die OS-Platte
   auszulagern.
 - **Alert**, wenn weniger als 2 GB RAM verfügbar sind (`terraform/monitoring.tf`).
 - **Rate-Limit in Caddy** pro Client-IP und Minute: auth 300, wiki 600, cloud 1200,
