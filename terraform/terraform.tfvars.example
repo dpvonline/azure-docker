@@ -25,8 +25,6 @@ UBUNTU_PRO_TOKEN = "C1abcDEFghiJKLmnoPQRstuVWXyz123"  # von ubuntu.com/pro, kost
 
 GITHUB_REPO_SSH_URL = "git@github.com:dpvonline/azure-docker.git"
 
-OLD_REPO_RESOURCE_GROUP = "Infra" # nur noch für die scout-tools.de-DNS-Zone
-
 # Optional: Entra-Gruppe, die die Key-Vault-Secrets lesen darf. Anlegen mit
 #   az ad group create --display-name "DPV Infra Admins" --mail-nickname dpv-infra-admins
 # Ohne das kommt nur das Konto an die Passwörter, das terraform apply ausführt.

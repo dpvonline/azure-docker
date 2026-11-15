@@ -234,9 +234,8 @@ dauert nach den Messungen aus Phase 1 etwa 45–60 Minuten.
   war. Server und Resolver hatten den neuen Stand längst; nach ein paar Minuten bzw.
   `dscacheutil -flushcache` lief es. Für Cutover B: TTL mindestens einen Tag vorher
   senken, dann stellt sich die Frage nicht.
-- **Offen:** AKS steht mit 0 Replikas für Keycloak und Confluence, die PVCs sind
-  unangetastet. Abriss nach ein paar unauffälligen Tagen, bis dahin im alten Repo kein
-  `terraform apply`.
+- AKS stand danach mit 0 Replikas für Keycloak und Confluence, bis zum Abriss am 28.10.
+  (siehe „Zwischenschritt — AKS abreißen" nach Phase 4).
 
 ### Wer merkt was
 
@@ -382,8 +381,9 @@ sie, oder sie müssten zurückmigriert werden. Deshalb Schritt 10 gründlich.
 - AKS eine Woche auf 0 stehen lassen, PVCs **nicht** löschen. Dann **AKS abreißen** —
   das ist die große Einsparung. Außer `auth` und `wiki` bedient AKS nur noch Biber und
   pgAdmin (`anmeldung.`, `db.scout-tools.de`), beide werden nicht mehr gebraucht.
+  Ablauf: „Zwischenschritt — AKS abreißen" nach Phase 4.
 - Die Testnamen `auth.` und `wiki.scout-tools.de` bedient die VM nach Schritt 9 nicht
-  mehr; die DNS-Einträge dafür in Phase 5 aufräumen.
+  mehr; die DNS-Einträge dafür fallen mit dem AKS-Abriss weg.
 - `office.dpvonline.de` zeigt auf AKS, antwortet aber schon heute nicht (Stand
   23.09.). Auf AKS lief dafür nie etwas, nur eine Ingress-Regel; Collabora wird in
   Phase 3 auf der VM neu aufgesetzt.
@@ -892,6 +892,69 @@ Nutzer betroffen.** Der Ablauf ist der aus Phase 3 mit denselben Skripten. Dauer
 letzte Delta-Lauf (am Vortag messen) plus ~15 Minuten für Dump, Konvertierung und
 Prüfen.
 
+### Stand 23.10.2026: durchgeführt
+
+- Vorher auf beiden Seiten auf Nextcloud **33.0.10** (PHP-Sicherheitsupdate). Der
+  Renovate-PR dafür (#35) sprang versehentlich auf 35 und wurde mit #37 auf 33.0.10
+  korrigiert, bevor die VM ihn zog. Seitdem öffnet Renovate je Major einen eigenen PR
+  (`separateMultipleMajor`).
+- `nc-sync.sh delta` vorab, im Fenster `nc-sync.sh cutover` in **27 Sekunden**
+  (10:20 UTC), dann Datenbank, Konvertierung, DNS. Bilder, PDFs und Office-Dateien
+  über Collabora funktionieren.
+- Lightsail steht im Wartungsmodus, der Host-Cron ist entfernt. Erreichbar per SSH
+  jetzt nur noch über die IP `3.65.3.213`, Port 1987 — `cloud.dpvonline.de` zeigt auf
+  die VM.
+- **Offen:** Aufräumen (siehe „Danach"), erst wenn alles als funktionsfähig gemeldet
+  ist.
+
+**Vorfall: PHP-Abstürze ab 23.10.** Nextcloud fiel wiederholt aus (Caddy: 502), bis
+der Container neu gestartet wurde. Ursache: Apache-Kindprozesse beendeten sich mit
+`Segmentation fault` — 502 am 23.10., 107 am 25.10., 68 am 28.10. Einmal begonnen,
+stürzte jeder neue Prozess ab, bis Apache neu startete; der Container selbst lief
+weiter (kein Neustart, kein OOM). Hauptverdacht ist der OPcache-JIT, den das Image
+einschaltet (`opcache.jit=1255`): sein Code liegt in gemeinsamem Speicher, und er lief
+erstmals unter echter Last, auf ARM64, mit dem neuen PHP 8.4.27. Bewiesen ist das
+nicht (kein Core-Dump, der Kernel protokollierte nichts). Seit 28.10. ist der JIT aus
+([`compose/nextcloud/zz-dpv-opcache-jit.ini`](compose/nextcloud/zz-dpv-opcache-jit.ini)).
+Stürzt es weiter ab: Core-Dumps aktivieren und die Stelle bestimmen.
+
+Nebenbefund: Am 27.10. war Postgres eine Stunde lang voll (236 abgelehnte
+Verbindungen, Standard 100). Seitdem `max_connections=200`.
+
+**Datenabgleich am 28.10.** Alle Dateien von Lightsail sind auf der VM, keine fehlt;
+12 wurden seit dem Cutover auf der VM geändert. Gegen die Datenbank geprüft: 4
+Papierkorb-Einträge ohne Datei wurden entfernt, 94 verwaiste `.part`-Dateien
+abgebrochener Uploads (291 MB) gelöscht.
+
+**SSO: seit 28.10. `user_oidc` statt `oidc_login`.** Umgestellt mit
+[`nc-sso.sh`](scripts/nextcloud-migration/nc-sso.sh), das vorher Gruppen,
+Mitgliedschaften, Kontingent und E-Mail sichert (`/root/sso/snapshot-*`). Zurück geht es
+mit `nc-sso.sh to-oidc-login`, `oidc_login` bleibt dafür installiert. Der Provider
+`DPV` nutzt denselben Keycloak-Client `nextcloud` und dessen Secret:
+
+```
+$O user_oidc:provider DPV --clientid=nextcloud --clientsecret='<Secret>' \
+  --discoveryuri=https://auth.dpvonline.de/realms/DPV/.well-known/openid-configuration \
+  --scope='openid profile email' --unique-uid=0 \
+  --mapping-uid=preferred_username --mapping-display-name=nickname \
+  --mapping-email=email --mapping-quota=nextcloudquota --mapping-groups=roles \
+  --group-provisioning=1 --group-whitelist-regex='/^(?!admin$)/' --send-id-token-hint=1
+$O config:system:set user_oidc enrich_login_id_token_with_userinfo --type=boolean --value=true
+```
+
+- `--unique-uid=0` und `soft_auto_provision` (Standard) übernehmen die bestehenden
+  Konten mit ihrer ID; `oc_user_oidc` bleibt deshalb leer.
+- Gruppen kommen bei jedem Login aus `roles`. Was dort fehlt, entfernt `user_oidc` —
+  außer `admin`, die bleibt lokal (Whitelist). Daran hängen die Gruppenordner, deshalb
+  in den ersten Tagen `nc-sso.sh diff` gegen die Momentaufnahme; `restore … --apply`
+  stellt Mitgliedschaften wieder her.
+- In Keycloak ist zusätzlich `https://cloud.dpvonline.de/apps/user_oidc/code` als
+  Redirect-URI eingetragen.
+- `/login` leitet direkt zu Keycloak (`allow_multiple_user_backends=0`), die lokale
+  Anmeldung bleibt unter `/login?direct=1` erreichbar.
+- Der Desktop-Client öffnet zum Anmelden den Browser und landet nicht mehr auf der
+  Nextcloud-Passwortmaske.
+
 ### Vorbereitung
 
 - **Mindestens einen Tag vorher bei IONOS** die TTL von `cloud.` und `office.dpvonline.de`
@@ -936,9 +999,176 @@ beide aus dem eingefrorenen Stand.
   - `docker rm -f nextcloud-mariadb`, `/data/apps/nextcloud-mariadb`,
     `/root/config.php.before-pgsql.*`
   - Keycloak-Client `nextcloud-test`
+  - `occ app:remove oidc_login`, die `oidc_login_*`-Werte aus `config.php` und die
+    alte Redirect-URI `/apps/oidc_login/oidc` im Keycloak-Client; `/root/sso` und
+    `/root/verify` auf der VM
 - Beim Abschalten von Lightsail **auch beide EFS löschen** (Nutzerdaten und Backups,
   zusammen >300 GB) — sie hängen nicht an der Instanz und kosten allein weiter. Das
   EFS hat ein eigenes AWS-Backup; dessen Aufbewahrung vorher prüfen.
+
+---
+
+## Zwischenschritt — AKS abreißen
+
+**Ziel:** Die Resource Group `Infra` ist weg, die Zone `scout-tools.de` liegt in
+`rg-dpv-core` und gehört diesem Repo, `azure-infrastructure` ist archiviert. Das spart
+~155 €/Monat. Keine Nutzer betroffen.
+
+### Stand 28.10.2026: durchgeführt
+
+- Den Cluster hat Philip am 28.10. von Hand gelöscht. Mit ihm ist die Gruppe
+  `MC_Infra_Kubernetes-Cluster_germanywestcentral` weg: Knoten, Load Balancer und alle
+  Platten, also auch das Postgres mit der Biber-Datenbank. Die Schritte unten liefen am
+  selben Tag.
+- Übrig waren in `Infra`: Registry `biber`, Log Analytics `kubernetes-analytics`,
+  Prometheus-Workspace `kubernetes-monitoring` (mit der verwalteten Gruppe
+  `MA_kubernetes-monitoring_…`), Datensammelregeln und -endpunkt, acht
+  Prometheus-Regelgruppen (sechs davon aus dem Portal, nicht aus Terraform), VNet
+  `k8s-network`, die beiden früheren Ingress-Adressen, ein Azure-Migrate-Projekt
+  `keycloak` und die Zone `scout-tools.de`. Bis auf die Zone ist alles mit der Gruppe
+  gelöscht; verwaiste Rollenzuweisungen blieben keine.
+- Das alte Repo wurde nicht zurückgeschnitten: Sein State war vom 24.09. und kannte den
+  Cluster noch, ein `terraform apply` hätte AKS neu aufgebaut. Stattdessen ging alles
+  Übrige mit der Resource Group. Seit Cutover B zeigt `office.dpvonline.de` auf die VM,
+  die früheren Ingress-Adressen konnten also mit weg, ohne dass ein Name ins Leere zeigt.
+- In der Zone stand außerdem ein A-Record `agent` auf `3.122.236.130` (AWS, antwortete
+  nicht), aus keinem der beiden Repos. Gelöscht: Ein Name auf eine freigegebene
+  Cloud-Adresse lässt sich von deren nächstem Inhaber übernehmen.
+- Die Zone liegt in `rg-dpv-core`, mit unveränderten Nameservern (`ns1-06` bis `ns4-06`)
+  und nur noch NS und SOA. Import und Tags mit #45.
+- Der Service Principal `Terraform` des alten Repos (Contributor und User Access
+  Administrator auf der Subscription) ist gelöscht; sein einziges Secret war das aus der
+  alten `variables.tfvars`. `azure-infrastructure` ist archiviert.
+- **Offen:** Die lokalen Dateien aus Schritt 6 löschen, vorher Confluence-Lizenz und
+  SMTP-Passwort aus der alten `variables.tfvars` sichern, falls sie sonst nirgends
+  stehen. Der Hinweis im README des alten Repos fehlt; zum Bearbeiten das Repo kurz
+  entarchivieren.
+
+### Warum die Zone umzieht und nicht neu entsteht
+
+`scout-tools.de` wird weiter gebraucht, derzeit aber ohne eigene Records. Die Zone wird
+nach `rg-dpv-core` **verschoben**: Laut [DNS-FAQ](https://learn.microsoft.com/en-us/azure/dns/dns-faq)
+bleiben die zugewiesenen Nameserver dabei gleich. Eine neue Zone gleichen Namens bekäme
+andere, und die Domain löste nicht mehr auf, bis die Delegation beim Registrar angepasst
+ist. Aus demselben Grund steht die Zone in [`terraform/dns.tf`](terraform/dns.tf) unter
+`prevent_destroy`.
+
+Vorher fallen alle Records weg, die nichts mehr bedienen: `auth`, `wiki`, `cloud` und
+`office` (Testnamen aus diesem Repo) sowie `@`, `db` und `anmeldung` (Biber und pgAdmin
+aus dem alten Repo), jeweils A und AAAA.
+
+### Schritte
+
+Nicht zwischen 01:00 und 04:30 UTC: Während des Umzugs sperrt Azure Quell- und
+Zielgruppe für Änderungen, und das könnte Azure Backup in `rg-dpv-core` stören.
+
+| # | Schritt | Rollback |
+|---|---|---|
+| 1 | Vorab: Locks prüfen, Nameserver und Records notieren | – |
+| 2 | Records löschen: 8 per Terraform, 6 per `az` | nicht nötig, nichts nutzt sie |
+| 3 | Zone verschieben, Nameserver vergleichen | zurückverschieben |
+| 4 | Zone in diesem Repo importieren, vom PR-Branch `apply`, PR mergen | wie 3 |
+| 5 | Resource Group `Infra` löschen — **ab hier kein Zurück** | – |
+| 6 | Altes Repo archivieren, lokal aufräumen | – |
+
+**1 — Vorab.**
+
+```
+az lock list -g Infra -o table
+az lock list -g rg-dpv-core -o table
+az network dns zone show -g Infra -n scout-tools.de --query nameServers -o tsv
+az network dns record-set list -g Infra -z scout-tools.de --query "[].{name:name, type:type}" -o table
+az role assignment list --scope "$(az network dns zone show -g Infra -n scout-tools.de --query id -o tsv)" -o table
+```
+
+Beide Lock-Listen müssen leer sein, ein Lock auf einer der Gruppen verhindert den Umzug.
+Die vier Nameserver notieren. Rollenzuweisungen direkt auf der Zone ziehen nicht mit um;
+steht dort etwas, nach Schritt 3 neu anlegen.
+
+**2 — Records.** In diesem Repo, noch auf `main`, also mit dem alten `dns.tf`:
+
+```
+cd terraform
+terraform destroy \
+  -target=azurerm_dns_a_record.auth   -target=azurerm_dns_aaaa_record.auth \
+  -target=azurerm_dns_a_record.wiki   -target=azurerm_dns_aaaa_record.wiki \
+  -target=azurerm_dns_a_record.cloud  -target=azurerm_dns_aaaa_record.cloud \
+  -target=azurerm_dns_a_record.office -target=azurerm_dns_aaaa_record.office
+```
+
+Erwartet: **8 to destroy**, nichts sonst. Dann die drei Namen aus dem alten Repo:
+
+```
+for n in @ db anmeldung; do
+  az network dns record-set a    delete -g Infra -z scout-tools.de -n "$n" --yes
+  az network dns record-set aaaa delete -g Infra -z scout-tools.de -n "$n" --yes
+done
+az network dns record-set list -g Infra -z scout-tools.de --query "[].{name:name, type:type}" -o table
+```
+
+Übrig bleiben NS und SOA, dazu alles aus Schritt 1, was nicht zu AKS gehörte; das zieht
+mit um.
+
+**3 — Umzug.**
+
+```
+az resource move --destination-group rg-dpv-core \
+  --ids "$(az network dns zone show -g Infra -n scout-tools.de --query id -o tsv)"
+az network dns zone show -g rg-dpv-core -n scout-tools.de --query nameServers -o tsv
+dig +noall +answer SOA scout-tools.de @8.8.8.8
+```
+
+Dauert ein paar Minuten. Die Nameserver müssen dieselben sein wie in Schritt 1, und
+`dig` muss eine Antwort zeigen. Sonst hier anhalten: `Infra` steht noch, und
+`az resource move --destination-group Infra …` bringt die Zone zurück.
+
+**4 — Übernehmen.** PR-Branch auschecken, in `terraform.tfvars` die Zeile
+`OLD_REPO_RESOURCE_GROUP` löschen (sonst nur eine Warnung), dann:
+
+```
+terraform import azurerm_dns_zone.scout_tools \
+  "/subscriptions/$(az account show --query id -o tsv)/resourceGroups/rg-dpv-core/providers/Microsoft.Network/dnsZones/scout-tools.de"
+terraform plan
+```
+
+Erwartet: **0 to add, 1 to change, 0 to destroy**, die Zone bekommt die Tags aus `TAGS`.
+Steht dort ein `create` für die Zone, hat der Import nicht gegriffen: **nicht anwenden**,
+Terraform legte sonst eine zweite Zone mit anderen Nameservern an. Passt der Plan,
+`terraform apply`, PR mergen, `git checkout main && git pull`. Die VM braucht nichts
+davon.
+
+**5 — `Infra` löschen.**
+
+```
+az resource list -g Infra --query "[].{name:name, type:type}" -o table
+az group delete -n Infra
+az group list --query "[].name" -o tsv
+az role assignment list --all --query "[?principalName==''].{role:roleDefinitionName, scope:scope}" -o table
+```
+
+In der ersten Liste darf `scout-tools.de` **nicht** mehr stehen. `az group delete` fragt
+nach und braucht ein paar Minuten; `MA_kubernetes-monitoring_…` sollte mit dem
+Monitor-Workspace verschwinden. Danach bleiben `rg-dpv-core`, `rg-dpv-tfstate`,
+`AzureBackupRG_…` und `NetworkWatcherRG`. Die letzte Abfrage zeigt Rollenzuweisungen
+gelöschter Identitäten, etwa die der Cluster-Identität; was sich auf `Infra` bezieht,
+mit `az role assignment delete --ids …` entfernen.
+
+**6 — Altes Repo.**
+
+- Im README von `azure-infrastructure` auf dieses Repo verweisen, dann
+  `gh repo archive dpvonline/azure-infrastructure`.
+- Den Service Principal des alten Repos (`CLIENT_ID` in dessen `variables.tfvars`)
+  löschen, wenn ihn sonst nichts nutzt:
+  `az role assignment list --assignee <CLIENT_ID> --all -o table`, dann
+  `az ad app delete --id <CLIENT_ID>`.
+- Lokal im alten Repo-Verzeichnis löschen: `terraform.tfstate*` und `variables.tfvars`
+  (Passwörter im Klartext), beide kubeconfig-Dateien, die `keycloak*.dump`
+  (Passwort-Hashes).
+
+### Rollback
+
+Bis Schritt 4 steht `Infra` noch, die Zone lässt sich zurückverschieben. Schritt 5 ist
+endgültig; gebraucht wird von dem, was dann noch in `Infra` liegt, nichts mehr.
 
 ---
 
@@ -951,13 +1181,12 @@ Kein Zeitdruck, alles nach dem letzten Cutover.
 - **Nextcloud weiter hochziehen**, 33 → 34 → 35, ein Major pro Schritt; vorher prüfen,
   ob alle Apps die neue Version unterstützen (Stand 24.09.: ja, für beide). Auf der VM
   ist das ein Renovate-PR plus Pre-Update-Backup, statt Handarbeit auf Lightsail.
-- **Auf `user_oidc` umstellen**, falls die Probe in Phase 3 gut ausgeht.
+- *Erledigt am 28.10.:* auf `user_oidc` umgestellt (Phase 4).
 - **`notify_push`** (Client-Push): entlastet den Server bei vielen Desktop-Clients,
   die sonst regelmäßig nach Änderungen fragen. Optional das Talk-Hochleistungs-Backend.
-- **`terraform/dns.tf` aufräumen** — die Records `auth`, `wiki`, `cloud` und `office`
-  in `scout-tools.de` werden nicht mehr gebraucht. Damit fällt die letzte Abhängigkeit zum alten Repo weg und
-  `azure-docker` steht vollständig auf eigenen Füßen.
-- **Altes Repo aufräumen** — migrierte Ressourcen aus `azure-infrastructure` entfernen.
+- *Erledigt mit dem AKS-Abriss:* `terraform/dns.tf` ist aufgeräumt, die Zone
+  `scout-tools.de` gehört diesem Repo, und `azure-infrastructure` hat keine Ressourcen
+  mehr.
 - **Optional:** `imaginary` als eigener Container für Bildvorschauen; Nextcloud Primary
   Object Storage auf Blob mit Lifecycle-Tiering, falls die Daten je in den TB-Bereich
   wachsen (bei 150 GB spart das ~15 €/Monat und kostet einen nicht unterstützten
@@ -967,13 +1196,9 @@ Kein Zeitdruck, alles nach dem letzten Cutover.
 
 ## Offene Fragen
 
-Die Fragen aus der Planung sind beantwortet (Versionen, Größen, SMB: siehe Phase 1 und
-Phase 3). Offen bleibt:
-
-| Frage | Gebraucht für | Wie herausfinden |
-|---|---|---|
-| Ersetzt `user_oidc` das bisherige `oidc_login`? | Phase 4 oder 5 | Probe in Phase 3 |
-| Warum landet der Desktop-Client nach dem Keycloak-Login auf der Passwortmaske? | Phase 3 | URL der Seite beim Auftreten notieren |
+Keine. Die Fragen aus der Planung sind beantwortet (Versionen, Größen, SMB: siehe
+Phase 1 und Phase 3). `user_oidc` hat `oidc_login` ersetzt, und damit ist auch die
+Passwortmaske im Desktop-Client verschwunden (Phase 4).
 
 ## Kostenüberblick
 
@@ -998,6 +1223,6 @@ jedes GB ~0,075 €. Eine VM-Reservierung lohnt sich nicht, solange die Credits 
 Credits können keine Reservierung bezahlen, die Reservierung ginge also samt
 Mehrwertsteuer auf die Karte.
 
-Bis zum Abriss kommt der AKS mit ~155 €/Monat dazu (Knoten, IP, Prometheus in `Infra`
-und der `MC_`-Gruppe). Nach dem Abriss bleiben dort die DNS-Zone `scout-tools.de`
-(~0,45 €) und eine Container Registry (~4,50 €), die mit Biber überflüssig ist.
+Bis zum Abriss am 28.10. kam der AKS mit ~155 €/Monat dazu (Knoten, IP, Prometheus in
+`Infra` und der `MC_`-Gruppe). Übrig bleibt davon nur die DNS-Zone `scout-tools.de`
+(~0,45 €), jetzt in `rg-dpv-core`; die Container Registry (~4,50 €) ging mit `Infra`.

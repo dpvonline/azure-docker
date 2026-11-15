@@ -28,8 +28,20 @@
 	}
 }
 
+# Access log, imported by every site below. Without it Caddy only logs requests
+# that failed, so in October 2026 nothing showed who had sent what to Nextcloud.
+# JSON on stderr, which Docker hands to journald (30 days, see x-logging in
+# docker-compose.yml). Caddy redacts the Authorization and Cookie headers itself.
+(access_log) {
+	log {
+		output stderr
+		format json
+	}
+}
+
 {$DOMAIN_AUTH} {
 	import ratelimit auth 300
+	import access_log
 	reverse_proxy keycloak:8080
 }
 
@@ -39,6 +51,7 @@
 # as for DOMAIN_AUTH: change the Key Vault secret, restart dpv-compose.service.
 {$DOMAIN_WIKI} {
 	import ratelimit wiki 600
+	import access_log
 	reverse_proxy confluence:8090
 }
 
@@ -49,6 +62,7 @@
 {$DOMAIN_CLOUD} {
 	# Sync clients are chatty (one PROPFIND per folder), hence the higher value.
 	import ratelimit cloud 1200
+	import access_log
 	# CalDAV/CardDAV discovery for calendar and contacts clients. Handled here
 	# because Nextcloud's own .htaccess rule would redirect to http:// behind a
 	# TLS-terminating proxy.
@@ -60,5 +74,6 @@
 
 # WebSockets (the editor session) pass through reverse_proxy without extra config.
 {$DOMAIN_OFFICE} {
+	import access_log
 	reverse_proxy collabora:9980
 }

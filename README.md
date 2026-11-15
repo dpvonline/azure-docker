@@ -1,8 +1,8 @@
 # azure-docker
 
 Neues Infra-Repo für den DPV-Stack: eine einzelne Azure-VM mit Docker Compose statt AKS.
-Ersetzt schrittweise `azure-infrastructure` (das alte Repo bleibt in Betrieb, bis dieses
-hier funktioniert und der DNS-Cutover erfolgt ist).
+Löst `azure-infrastructure` ab; AKS ist seit dem 28.10.2026 abgerissen, das alte Repo
+archiviert.
 
 ## Status: Kern-Phase
 
@@ -20,7 +20,7 @@ Wie diese Dienste von AKS bzw. AWS Lightsail hierher kommen, steht in
 **[MIGRATION.md](MIGRATION.md)** — Phasen, Cutover-Fenster, Rollback pro Schritt.
 
 Container-Updates sind seitdem automatisiert (Renovate + wöchentlicher Rollout mit
-Rollback) — siehe unten.
+Rollback), OS-Updates laufen nächtlich per `unattended-upgrades` — siehe unten.
 
 ## Architektur
 
@@ -81,16 +81,14 @@ Rollback) — siehe unten.
   cert-manager/nginx-ingress nötig.
 - **Terraform-State liegt remote** in einem Azure Storage Account (`bootstrap/` legt ihn
   einmalig an, da der Storage Account nicht sein eigenes Backend sein kann).
-- **DNS zum Testen**: `auth.scout-tools.de` — die Zone `scout-tools.de` gehört weiterhin dem
-  alten Repo (`azure-infrastructure`, `azure/domain.tf`), dieses Repo referenziert sie nur
-  per `data`-Quelle und verwaltet einen einzelnen neuen Record (`auth`, dort aktuell
-  auskommentiert/nicht angelegt) über `terraform/dns.tf`. **Für den echten Cutover** liegt
-  `dpvonline.de` extern (nicht Azure DNS) — der Umstieg der A/AAAA-Records auf die neue
-  VM-IP bleibt dann ein manueller Schritt, nicht Teil dieses Repos.
-- **Resource Group**: bewusst eine neue (`rg-dpv-core`), getrennt von `Infra` (dem alten
-  Repo) — nur noch der DNS-Record referenziert `Infra` per `data`-Quelle, nichts davon
-  wird hier verändert oder mitverwaltet. (Die ACR-Referenz gab es ausschließlich für das
-  Biber-Backend und ist mit diesem entfallen.)
+- **DNS**: `dpvonline.de` liegt extern bei IONOS (nicht Azure DNS); A/AAAA-Records auf
+  die VM sind dort ein manueller Schritt, nicht Teil dieses Repos. Die Zone
+  `scout-tools.de` (bis zu den Cutovers die Testnamen) gehört seit dem AKS-Abriss diesem
+  Repo und liegt in `rg-dpv-core`, derzeit ohne eigene Records. Sie steht in
+  `terraform/dns.tf` unter `prevent_destroy`: Eine neu angelegte Zone bekäme andere
+  Nameserver als die, auf die der Registrar delegiert.
+- **Resource Group**: bewusst eine neue (`rg-dpv-core`). `Infra`, die Gruppe des alten
+  Repos, ist mit dem AKS-Abriss gelöscht.
 
 ## Einmalige Umstellung auf Postgres 18 (Phase 0)
 
@@ -291,10 +289,9 @@ committen.
      Postgres-User, nicht mit einem Linux-User auf der VM zu verwechseln, den es nicht gibt;
      `docker exec`/`compose exec` läuft sonst als `root`, und pgBackRest verbindet sich lokal
      dann fälschlich als Rolle `root` statt `postgres`)
-   - DNS für `auth.scout-tools.de` ist bereits durch `terraform/dns.tf` gesetzt (zeigt auf
-     `vm_public_ip`) — sobald das propagiert ist, stellt Caddy automatisch ein
-     Let's-Encrypt-Zertifikat aus. Für den späteren Produktiv-Cutover auf eine
-     `dpvonline.de`-Subdomain bleibt das ein manueller DNS-Schritt (siehe oben).
+   - A- und AAAA-Records der Domains aus `DOMAIN_*` müssen auf `vm_public_ip` bzw.
+     `vm_public_ipv6` zeigen (bei IONOS von Hand, siehe oben) — sobald das propagiert
+     ist, stellt Caddy automatisch ein Let's-Encrypt-Zertifikat aus.
 
 4. Verifikation: `curl -I https://<DOMAIN_AUTH>` (von außen) und, da Keycloaks Port 9000
    absichtlich nicht auf den Host published ist (nur Caddy erreicht ihn intern), von der VM aus:
@@ -494,11 +491,30 @@ per PR) und **Ausrollen** auf der VM (wöchentlich, automatisch, mit Rollback).
 weil es zusätzlich **Terraform-Provider-Versionen** abdeckt (`azurerm`/`random`/`tls`)
 und eingebautes Auto-Merge direkt in der Config hat (kein separater GitHub-Actions-
 Workflow nötig — praktisch, da unser `gh`-Token ohnehin keinen `workflow`-Scope hat).
-Konfiguriert in `renovate.json`: wöchentlich sonntags, `packageRules` mit Automerge nur
-für Patch/Minor — Major-Bumps (z. B. ein Sprung von `postgres:17` auf `18`) bleiben
-immer manuell zu mergen, weil sowas bei Postgres kein simpler Image-Swap ist
-(inkompatibles Datenverzeichnis, braucht `pg_upgrade`/Dump-Restore) und bei Keycloak
-größere Migrationen mit sich bringen kann.
+Konfiguriert in `renovate.json`:
+
+- **Wann**: neue PRs nur sonntags vor 06:00 UTC, und nur für Versionen, die
+  **mindestens 7 Tage** alt sind (`minimumReleaseAge` + `internalChecksFilter: strict`).
+  Jüngere stehen bis dahin als „pending" im Dependency Dashboard (Issue im Repo).
+- **Patch/Minor**: PR, den Renovate selbst mergt (Automerge) — für alle Dienste,
+  seit Oktober 2026 auch für Confluence-Minors (vorher nur Patches). Gemergt wird bei
+  einem der nächsten Renovate-Läufe nach dem Anlegen, nicht im selben. Bis Oktober 2026
+  hat Automerge nie gegriffen: Das Repo hat keine CI, der einzige Status-Check auf einem
+  Renovate-Branch ist Renovates eigener `renovate/stability-days`, und den zählt Renovate
+  standardmäßig nicht als „grün". `internalChecksAsSuccess` behebt das, ohne die
+  7-Tage-Prüfung auszuhebeln (anders als `ignoreTests`, das jeden Check übergeht).
+- **Major**: PR, aber nie Automerge — immer von Hand prüfen und mergen. Bei Postgres ist
+  ein Major kein simpler Image-Swap (inkompatibles Datenverzeichnis, braucht
+  `pg_upgrade`/Dump-Restore), bei Keycloak und Confluence können größere Migrationen
+  dranhängen, bei Nextcloud müssen alle installierten Apps die neue Version
+  unterstützen.
+- **Ein Major pro PR** (`maxMajorIncrement: 1`): Nextcloud startet nicht, wenn ein Major
+  übersprungen wird — ein PR 33 → 35 wie im Oktober 2026 ist damit ausgeschlossen.
+  34 → 35 bietet Renovate erst an, wenn 33 → 34 auf `main` ist. Faustregel: den
+  nächsten Major-PR desselben Dienstes erst mergen, wenn der vorige auf der VM
+  ausgerollt ist (`/var/log/dpv-update.log`), sonst rollt der Sonntagslauf beide auf
+  einmal aus. Bei Nextcloud fängt das zwar das Image selbst ab (Container startet
+  nicht → Health-Check → Rollback), aber jeder weitere Update-Lauf hängt dann daran fest.
 
 **Einmalig nötig** (schon erledigt): die Renovate-GitHub-App muss über
 https://github.com/apps/renovate auf `dpvonline/azure-docker` installiert werden —
@@ -520,14 +536,19 @@ war). Ablauf:
 4. `docker compose pull && docker compose up -d --build`.
 5. Health-Check-Schleife (bis zu 5 Minuten): alle Services `running`, Keycloak-Health
    (`/health/ready`), Postgres (`pg_isready`).
-6. Bei Erfolg: Log-Eintrag nach `/var/log/dpv-update.log`, fertig.
+6. Bei Erfolg: Images und Build-Cache, die kein Container mehr nutzt, löschen
+   (`docker image prune -af`, `docker builder prune -f`), freien Platz und Log-Eintrag
+   nach `/var/log/dpv-update.log`, fertig. Ohne das blieb jede alte Version liegen —
+   bis November 2026 gut 20 GB der 46-GB-OS-Platte.
 7. Bei Fehlschlag (Pull/Build/Health-Check): `git reset --hard` auf den gemerkten
-   Commit + `docker compose up -d --build` — Rollback auf den vorherigen Stand (alte
-   Images liegen i. d. R. noch lokal im Cache, kein erneuter Pull nötig).
+   Commit + `docker compose up -d --build` — Rollback auf den vorherigen Stand (die
+   alten Images liegen noch lokal, weil erst nach einem erfolgreichen Lauf aufgeräumt
+   wird; ein späteres Zurückdrehen von Hand lädt sie neu).
 
 **Ehrliche Grenze**: das Rollback bringt den Container-Stand zurück, aber falls eine
 DB-Migration (Keycloak führt bei *jeder* Versionsänderung welche aus, nicht nur bei
-Major-Versionen) vor dem Fehlschlag bereits teilweise gegriffen hat, ist das nicht
+Major-Versionen, Confluence bei Minor-Versionen) vor dem Fehlschlag bereits teilweise
+gegriffen hat, ist das nicht
 automatisch mit rückgängig gemacht — dafür ist das Vor-Update-Backup da (manueller
 Restore nach dem oben beschriebenen Ablauf).
 
@@ -543,11 +564,104 @@ Schedule/Logik brauchen dadurch keinen VM-Rebuild mehr, nur diese initiale Einf�
 brauchte noch einen (weil `cloud-init.yaml.tftpl`s `runcmd` sich geändert hat, um die
 Dateien einmalig zu kopieren).
 
+## Automatische OS-Updates
+
+`unattended-upgrades` spielt jede Nacht alles ein, was die Paketquellen der VM hergeben —
+nicht nur Sicherheitsupdates (Ubuntus Voreinstellung), sondern auch die regulären
+Ubuntu-Updates (`noble-updates`), Docker Engine + Compose-Plugin und die Azure CLI.
+Konfiguriert in `scripts/apt/52dpv-unattended-upgrades` (ergänzt Ubuntus
+`50unattended-upgrades`, ersetzt sie nicht),
+`scripts/systemd/apt-daily-upgrade.timer.d/10-dpv-schedule.conf` und
+`scripts/systemd/dpv-reboot-if-required.{service,timer}`.
+
+- **Wann**: täglich 00:30 UTC statt Ubuntus 06:00 plus bis zu einer Stunde Zufall — vor
+  Azure Backup (01:00), pgBackRest (02:00), Sonntags-Update (03:30) und
+  Confluence-Prune (04:30).
+- **Neustart**: höchstens einmal pro Woche, **sonntags 04:10 UTC** nach dem
+  Container-Update, und nur wenn ein Update ihn verlangt (`/run/reboot-required`, vor
+  allem Kernel). Ubuntu Pro hilft hier nicht: Livepatch gibt es auf ARM64 erst ab Ubuntu
+  26.04, die VM läuft auf 24.04 — Pro liefert ihr nur ESM. Der Preis des
+  Wochenrhythmus: ein Kernel-Fix liegt bis zu einer Woche installiert, aber inaktiv
+  herum. Läuft um 04:10 noch ein Update-Lauf, fällt der Neustart für diese Woche aus.
+  Der Stack kommt danach von selbst wieder hoch: Docker wartet auf die Datenplatten,
+  `dpv-compose.service` startet `boot.sh`.
+- **Docker-Updates** starten den Daemon neu und damit alle Container — ein paar Minuten
+  Ausfall in der Nacht, das meiste davon der Start von Confluence.
+- **Geänderte Konfigurationsdateien**: dpkg behält die lokale Version
+  (`--force-confold`), statt das Paket stillschweigend dauerhaft auszulassen.
+- **Nicht enthalten**: Ubuntu-Release-Upgrades (24.04 → 26.04) bleiben Handarbeit. Der
+  Azure Monitor Agent aktualisiert sich über `automatic_upgrade_enabled`
+  (`terraform/monitoring.tf`), die Container über Renovate (oben).
+
+Kontrolle auf der VM:
+```bash
+systemctl list-timers apt-daily-upgrade.timer dpv-reboot-if-required.timer
+cat /run/reboot-required.pkgs 2>/dev/null                         # wartet ein Neustart, und wofür?
+journalctl -u dpv-reboot-if-required.service                      # vergangene Sonntags-Neustarts
+sudo tail -50 /var/log/unattended-upgrades/unattended-upgrades.log
+sudo unattended-upgrade --dry-run --debug 2>&1 | grep -A6 'Allowed origins'
+```
+
+**Einmalig auf der bestehenden VM**: cloud-init installiert die Dateien erst beim
+nächsten Neuaufbau (`custom_data` wird ignoriert, siehe `terraform/vm.tf`). Erst
+ausführen, nachdem das Sonntags-Update den Commit gezogen hat — kein eigenes `git pull`
+vorab, sonst sieht der nächste Update-Lauf keine Änderung und lässt gemergte
+Container-Bumps liegen:
+```bash
+sudo install -m 0644 /opt/dpv/scripts/apt/52dpv-unattended-upgrades /etc/apt/apt.conf.d/
+sudo install -D -m 0644 /opt/dpv/scripts/systemd/apt-daily-upgrade.timer.d/10-dpv-schedule.conf /etc/systemd/system/apt-daily-upgrade.timer.d/10-dpv-schedule.conf
+sudo cp /opt/dpv/scripts/systemd/dpv-reboot-if-required.{service,timer} /etc/systemd/system/
+sudo systemctl daemon-reload && sudo systemctl restart apt-daily-upgrade.timer
+sudo systemctl enable --now dpv-reboot-if-required.timer
+```
+
+## Container-Logs (30 Tage)
+
+Alle Container schreiben ins systemd-Journal der VM (`x-logging` in jeder
+`compose/docker-compose*.yml`), journald hebt die Logs 30 Tage auf
+(`scripts/journald/10-dpv-retention.conf`). Vorher lagen sie in Dockers json-Dateien,
+und die verschwinden mit dem Container — bei jedem Update, jeder geänderten
+Konfiguration. Bei der PHP2Shell-Prüfung im Oktober 2026 fehlten deshalb genau die Tage,
+um die es ging. Caddy schreibt außerdem ein Access-Log für alle vier Seiten (vorher nur
+fehlgeschlagene Anfragen): Client-IP, Methode, Pfad, Status, Header. `Authorization` und
+`Cookie` schwärzt Caddy selbst.
+
+- **Wie lange**: 30 Tage, gelöscht tageweise. Höchstens 5 GB, und journald lässt auf `/`
+  mindestens 10 GB frei, damit Logs allein nie den Platten-Alert (unter 20 % frei)
+  auslösen. Wird eine der Grenzen vorher erreicht, fallen die ältesten Tage früher weg —
+  `journalctl --disk-usage` zeigt den Stand.
+- **Neuer Dienst**: braucht `logging: *logging`, sonst landen seine Logs wieder in einer
+  json-Datei, die mit dem Container verschwindet.
+- **Datenschutz**: Die Logs enthalten IP-Adressen und Benutzernamen. Zweck (Sicherheit
+  des Betriebs) und Frist gehören ins Verarbeitungsverzeichnis. Azure Backup sichert die
+  OS-Platte mit, dort bleiben sie so lange wie die Sicherung (bis zu 6 Monate, siehe
+  „Backup-Ebene 2").
+
+Abfragen auf der VM (`docker logs` geht weiterhin, zeigt aber nur den laufenden Container):
+```bash
+sudo journalctl -t dpv-core-nextcloud-1 --since "2026-11-01 10:00" --until "2026-11-01 11:00"
+sudo journalctl -t dpv-core-caddy-1 --since today -o cat | jq -c 'select(.status >= 500) | [(.ts|todate), .request.client_ip, .request.method, .request.uri, .status]'
+sudo journalctl --disk-usage
+```
+
+**Umstellung**: Der Sonntags-Update-Lauf, der diesen Commit zieht, erstellt einmal alle
+Container neu (ihre `logging`-Konfiguration hat sich geändert), auch Postgres und
+Confluence — ein paar Minuten Ausfall um 03:30 UTC. Caddy liest dabei das neue
+Caddyfile. Die bisherigen json-Logs verschwinden mit den alten Containern.
+
+**Einmalig auf der bestehenden VM**, nachdem das Sonntags-Update den Commit gezogen hat
+(gleicher Grund wie oben). Bis dahin gelten Ubuntus Voreinstellungen: kein Zeitlimit,
+höchstens 4 GB.
+```bash
+sudo install -D -m 0644 /opt/dpv/scripts/journald/10-dpv-retention.conf /etc/systemd/journald.conf.d/10-dpv-retention.conf
+sudo systemctl restart systemd-journald
+```
+
 ## Repo-Struktur
 
 ```
 bootstrap/    einmaliger Storage Account fürs Terraform-Remote-State (eigenes State)
 terraform/    eigentliche Infrastruktur (VM, Platten, Netzwerk, Key Vault, Backup, Monitoring)
 compose/      Docker-Compose-Definitionen + Caddyfile, laufen auf der VM
-scripts/      cloud-init-Template, Secret-Fetch-Skript, pgBackRest-Config-Template, Backup-Cron, Update-Skript + systemd-Units
+scripts/      cloud-init-Template, Secret-Fetch-Skript, pgBackRest-Config-Template, Backup-Cron, Update-Skript + systemd-Units, apt-Config für OS-Updates, journald-Config für Container-Logs
 ```
