@@ -904,8 +904,8 @@ Prüfen.
 - Lightsail steht im Wartungsmodus, der Host-Cron ist entfernt. Erreichbar per SSH
   jetzt nur noch über die IP `3.65.3.213`, Port 1987 — `cloud.dpvonline.de` zeigt auf
   die VM.
-- **Offen:** Aufräumen (siehe „Danach"), erst wenn alles als funktionsfähig gemeldet
-  ist.
+- Aufgeräumt am 15.11., nach drei Wochen ohne Beschwerden (siehe „Danach"). Offen
+  ist nur noch Lightsail selbst.
 
 **Vorfall: PHP-Abstürze ab 23.10.** Nextcloud fiel wiederholt aus (Caddy: 502), bis
 der Container neu gestartet wurde. Ursache: Apache-Kindprozesse beendeten sich mit
@@ -926,11 +926,13 @@ Verbindungen, Standard 100). Seitdem `max_connections=200`.
 Papierkorb-Einträge ohne Datei wurden entfernt, 94 verwaiste `.part`-Dateien
 abgebrochener Uploads (291 MB) gelöscht.
 
-**SSO: seit 28.10. `user_oidc` statt `oidc_login`.** Umgestellt mit
-[`nc-sso.sh`](scripts/nextcloud-migration/nc-sso.sh), das vorher Gruppen,
-Mitgliedschaften, Kontingent und E-Mail sichert (`/root/sso/snapshot-*`). Zurück geht es
-mit `nc-sso.sh to-oidc-login`, `oidc_login` bleibt dafür installiert. Der Provider
-`DPV` nutzt denselben Keycloak-Client `nextcloud` und dessen Secret:
+**SSO: seit 28.10. `user_oidc` statt `oidc_login`.** Umgestellt mit `nc-sso.sh`, das
+vorher Gruppen, Mitgliedschaften, Kontingent und E-Mail sicherte und auch zurückschalten
+konnte. Seit dem 15.11. ist `oidc_login` samt seinen Werten in `config.php` und in der
+Datenbank entfernt; vom Skript blieb der Gruppen-Snapshot als
+[`nc-groups.sh`](scripts/nextcloud-migration/nc-groups.sh). Der Provider `DPV` nutzt
+denselben Keycloak-Client `nextcloud` und dessen Secret. Das Secret liegt verschlüsselt in
+`oc_user_oidc_providers`, der Schlüssel dafür ist `secret` in `config.php`:
 
 ```
 $O user_oidc:provider DPV --clientid=nextcloud --clientsecret='<Secret>' \
@@ -943,11 +945,13 @@ $O config:system:set user_oidc enrich_login_id_token_with_userinfo --type=boolea
 ```
 
 - `--unique-uid=0` und `soft_auto_provision` (Standard) übernehmen die bestehenden
-  Konten mit ihrer ID; `oc_user_oidc` bleibt deshalb leer.
+  Konten mit ihrer ID. In `oc_user_oidc` landen nur Konten, die `user_oidc` neu
+  angelegt hat (bis 15.11. eines).
 - Gruppen kommen bei jedem Login aus `roles`. Was dort fehlt, entfernt `user_oidc` —
-  außer `admin`, die bleibt lokal (Whitelist). Daran hängen die Gruppenordner, deshalb
-  in den ersten Tagen `nc-sso.sh diff` gegen die Momentaufnahme; `restore … --apply`
-  stellt Mitgliedschaften wieder her.
+  außer `admin`, die bleibt lokal (Whitelist). Daran hängen die Gruppenordner. Bis
+  15.11. hat dabei niemand eine Gruppe verloren. Vor Änderungen an Rollen oder Mappern
+  in Keycloak `nc-groups.sh snapshot`, danach `diff`; `restore … --apply` stellt
+  Mitgliedschaften wieder her.
 - In Keycloak ist zusätzlich `https://cloud.dpvonline.de/apps/user_oidc/code` als
   Redirect-URI eingetragen.
 - `/login` leitet direkt zu Keycloak (`allow_multiple_user_backends=0`), die lokale
@@ -992,16 +996,20 @@ beide aus dem eingefrorenen Stand.
 - Lightsail **im Wartungsmodus** weiterlaufen lassen, bis alles durchgetestet ist. So
   bleibt es Rollback-Ziel, aber Clients mit altem DNS-Eintrag schreiben nicht mehr
   dorthin.
-- Aufräumen, wenn alles als funktionsfähig gemeldet ist:
+- Aufräumen, wenn alles als funktionsfähig gemeldet ist — *erledigt am 15.11.*, bis
+  auf die zwei Punkte in Keycloak:
   - `3.65.3.213/32` aus `ADMIN_IP_CIDRS`, `terraform apply`
-  - Migrationsschlüssel aus `~dpvadmin/.ssh/authorized_keys` der VM, auf Lightsail
-    `/root/.ssh/dpv-migration_ed25519*` löschen
-  - `docker rm -f nextcloud-mariadb`, `/data/apps/nextcloud-mariadb`,
-    `/root/config.php.before-pgsql.*`
-  - Keycloak-Client `nextcloud-test`
-  - `occ app:remove oidc_login`, die `oidc_login_*`-Werte aus `config.php` und die
-    alte Redirect-URI `/apps/oidc_login/oidc` im Keycloak-Client; `/root/sso` und
-    `/root/verify` auf der VM
+  - Migrationsschlüssel aus `~dpvadmin/.ssh/authorized_keys` der VM. Auf Lightsail
+    blieb `/root/.ssh/dpv-migration_ed25519*` liegen, die Instanz war per SSH nicht mehr
+    erreichbar; der Schlüssel öffnet nichts mehr und geht mit der Instanz.
+  - `nextcloud-mariadb` samt Image und `/data/apps/nextcloud-mariadb`,
+    `/root/config.php.before-pgsql*` und die Migrationsreste in `/root`
+  - `oidc_login`: App, die `oidc_login_*`-Werte aus `config.php` und seine Zeilen in
+    `oc_appconfig`/`oc_preferences`. `occ app:remove` entfernt nur aktivierte Apps,
+    deshalb erst die Werte löschen (dann leitet sie nichts mehr um), kurz aktivieren,
+    entfernen. `/root/sso` und `/root/verify` auf der VM
+  - **Offen, in Keycloak:** Client `nextcloud-test` löschen, im Client `nextcloud` die
+    alte Redirect-URI `/apps/oidc_login/oidc` entfernen
 - Beim Abschalten von Lightsail **auch beide EFS löschen** (Nutzerdaten und Backups,
   zusammen >300 GB) — sie hängen nicht an der Instanz und kosten allein weiter. Das
   EFS hat ein eigenes AWS-Backup; dessen Aufbewahrung vorher prüfen.
