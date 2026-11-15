@@ -55,24 +55,15 @@ resource "azurerm_backup_policy_vm" "daily" {
 
   # Enhanced policies allow up to 30 days of instant-restore snapshots (Standard
   # caps at 5). These snapshots live next to the disks and are what makes a
-  # same-day restore fast, but they are billed as snapshot storage — 7 days is
-  # the balance between a quick restore window and paying for ~150 GB of
-  # Nextcloud data several times over.
-  instant_restore_retention_days = 7
+  # restore of the last two days fast, but they are billed as snapshot storage
+  # (~150 GB of Nextcloud data per copy). Older restores come from the vault
+  # and take longer — acceptable, since nothing older than 7 days is needed.
+  instant_restore_retention_days = 2
 
+  # Only the last 7 daily points are kept; no weekly/monthly long-term
+  # retention. Postgres has its own point-in-time recovery via pgBackRest.
   retention_daily {
-    count = 14
-  }
-
-  retention_weekly {
-    count    = 6
-    weekdays = ["Sunday"]
-  }
-
-  retention_monthly {
-    count    = 6
-    weekdays = ["Sunday"]
-    weeks    = ["First"]
+    count = 7
   }
 }
 
