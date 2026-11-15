@@ -19,8 +19,12 @@ volumes:
 
 services:
   caddy:
-    image: caddy:2.11-alpine
+    # Built locally for the rate_limit module, see caddy/Dockerfile.
+    build: ./caddy
+    image: dpv-caddy:2.11-ratelimit
     restart: unless-stopped
+    # Every request enters through Caddy; keep it alive under memory pressure.
+    oom_score_adj: -500
     # Map form (not a list) so docker-compose.nextcloud.yml can add network
     # aliases to it.
     networks:

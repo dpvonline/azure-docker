@@ -34,6 +34,12 @@ services:
       # User files — the path stays /var/www/html/data inside the container, so
       # `datadirectory` in config.php does not change with the move.
       - /data/nextcloud:/var/www/html/data
+      # Caps Apache's worker count, see the file for why.
+      - ./nextcloud-mpm.conf:/etc/apache2/conf-enabled/zz-dpv-mpm.conf:ro
+    # Hard memory ceiling per container (the VM has 16 GB and no swap beyond
+    # zram). Without limits one service's runaway takes the whole VM down
+    # (OOM 2026-11-11); with them the kernel kills only the offender's cgroup.
+    mem_limit: 3g
     # Port 80 is intentionally not published — Caddy reaches it over "dpv".
 
   # Background jobs (trash and version expiry, file scans, calendar reminders,
@@ -53,6 +59,7 @@ services:
     environment:
       REDIS_HOST: redis
       PHP_MEMORY_LIMIT: 1G
+    mem_limit: 768m
     volumes:
       - /data/apps/nextcloud:/var/www/html
       - /data/nextcloud:/var/www/html/data
@@ -62,7 +69,8 @@ services:
     # no persistence and no volume.
     image: redis:8.10-alpine
     restart: unless-stopped
-    command: ["redis-server", "--save", "", "--appendonly", "no"]
+    command: ["redis-server", "--save", "", "--appendonly", "no", "--maxmemory", "200mb", "--maxmemory-policy", "allkeys-lru"]
+    mem_limit: 256m
     networks:
       - dpv
 
@@ -75,6 +83,7 @@ services:
       - dpv
     cap_add:
       - MKNOD
+    mem_limit: 2g
     environment:
       # The only Nextcloud allowed to open documents here.
       aliasgroup1: "https://${DOMAIN_CLOUD}:443"

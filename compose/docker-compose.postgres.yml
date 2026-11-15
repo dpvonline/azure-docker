@@ -3,6 +3,10 @@ services:
     build: ./postgres
     image: dpv-postgres:18-pgbackrest
     restart: unless-stopped
+    # Last candidate for the OOM killer: everything else depends on Postgres,
+    # and a kill mid-write means crash recovery. No mem_limit on purpose — the
+    # other services are capped, so Postgres gets what is left.
+    oom_score_adj: -500
     networks:
       - dpv
     environment:

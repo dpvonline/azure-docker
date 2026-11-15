@@ -7,6 +7,8 @@ services:
     networks:
       - dpv
     command: ["start"]
+    # Keycloak sizes its max heap from the container limit (70 %).
+    mem_limit: 1280m
     environment:
       KC_HTTP_ENABLED: "true"
       KC_PROXY_HEADERS: "xforwarded"
