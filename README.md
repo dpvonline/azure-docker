@@ -540,7 +540,8 @@ war). Ablauf:
    Fehler dort werden ins Log geschrieben (`WARNING`), das Container-Update läuft
    trotzdem weiter. Docker startet dafür nie neu (ein geändertes Drop-in gilt ab dem
    nächsten Boot). Ein Rollback (Schritt 8) macht eingespielte Host-Dateien nicht
-   rückgängig. Aus `/etc` verschwindet nichts, was im Repo gelöscht wird.
+   rückgängig. Was im Repo gelöscht wird, entfernt es auch aus `/etc` (nur Dateien mit „dpv“ im Namen
+   in den eigenen Verzeichnissen, Timer werden vorher deaktiviert).
 5. `docker compose pull && docker compose up -d --build`.
 6. Health-Check-Schleife (bis zu 5 Minuten): alle Services `running`, Keycloak-Health
    (`/health/ready`), Postgres (`pg_isready`).

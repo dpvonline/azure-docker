@@ -26,9 +26,13 @@
 #   - Errors are loud but not fatal: every step is attempted, failures are
 #     logged as WARNING and reflected in the exit code (1). The caller only
 #     warns, so a broken host config never blocks a container update.
-#   - Files deleted from the repo are NOT removed from /etc. The script cannot
-#     tell "deleted on purpose" from "never managed"; remove them by hand
-#     (and disable the unit first).
+#   - Files deleted from the repo are removed from /etc: every file in the
+#     directories below whose name contains "dpv" and that is not in the
+#     sync_file list is an orphan (timers are disabled first). The list in this
+#     script is the reference, not the repo layout. Only "dpv" names in these
+#     directories are ever touched, never anything else in /etc, and
+#     dpv-compose.service is exempt (cloud-init renders it). A source file that
+#     is missing counts as managed, so a broken checkout deletes nothing.
 #   - A rollback in update-containers.sh (git reset --hard) does not revert host
 #     files already installed. They do not depend on the containers and the
 #     health check does not cover them, so a failed container update says
@@ -57,6 +61,7 @@ APT_LOCK_TIMEOUT=600
 
 FAILED=0
 CHANGED=0
+MANAGED=""
 NEED_RELOAD=0
 DOCKER_DROPIN_CHANGED=0
 UPDATE_TIMER_CHANGED=0
@@ -81,6 +86,8 @@ warn() {
 # for real changes only.
 sync_file() {
   local src="$SCRIPTS_DIR/$1" dest="$ROOT$2" verb="installed"
+  # Recorded first, whatever happens below: see the orphan cleanup.
+  MANAGED="$MANAGED$2"$'\n'
   if [ ! -f "$src" ]; then
     warn "source file missing: $src"
     return 1
@@ -150,6 +157,39 @@ sync_file journald/10-dpv-retention.conf /etc/systemd/journald.conf.d/10-dpv-ret
 # zram swap. Only the generator turns this file into units, so the package must
 # be there before the daemon-reload below.
 sync_file systemd/zram-generator.conf /etc/systemd/zram-generator.conf && { NEED_RELOAD=1; ZRAM_CONF_CHANGED=1; }
+
+# --- 1b. Remove orphans ---------------------------------------------------------
+# Same names the explicit list above uses, found by their "dpv" in the name.
+# dpv-compose.service is not from the repo and must stay.
+for f in \
+  "$ROOT"/etc/systemd/system/dpv-*.service \
+  "$ROOT"/etc/systemd/system/dpv-*.timer \
+  "$ROOT"/etc/systemd/system/docker.service.d/*dpv*.conf \
+  "$ROOT"/etc/systemd/system/apt-daily-upgrade.timer.d/*dpv*.conf \
+  "$ROOT"/etc/apt/apt.conf.d/*dpv* \
+  "$ROOT"/etc/systemd/journald.conf.d/*dpv*; do
+  [ -f "$f" ] || continue
+  path="${f#"$ROOT"}"
+  [ "$path" = /etc/systemd/system/dpv-compose.service ] && continue
+  printf '%s' "$MANAGED" | grep -Fxq -- "$path" && continue
+  unit="$(basename "$path")"
+  case "$path" in
+    /etc/systemd/system/*.timer) systemctl disable --now "$unit" || warn "could not disable $unit" ;;
+    /etc/systemd/system/*.service) systemctl disable "$unit" || warn "could not disable $unit" ;;
+  esac
+  if rm -f "$f"; then
+    log "removed $path (no longer in the repo)"
+    CHANGED=$((CHANGED + 1))
+    NEED_RELOAD=1
+    case "$path" in
+      /etc/systemd/system/docker.service.d/*) DOCKER_DROPIN_CHANGED=1 ;;
+      /etc/systemd/system/apt-daily-upgrade.timer.d/*) APT_TIMER_DROPIN_CHANGED=1 ;;
+      /etc/systemd/journald.conf.d/*) JOURNALD_CHANGED=1 ;;
+    esac
+  else
+    warn "could not remove $path"
+  fi
+done
 
 # --- 2. zram package ----------------------------------------------------------
 # cloud-init installs it on first boot; the existing VM got it by hand. Checked
