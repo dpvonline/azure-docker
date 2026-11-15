@@ -104,6 +104,16 @@ while [ "$elapsed" -lt "$HEALTH_TIMEOUT_SECONDS" ]; do
 done
 
 if $healthy; then
+  # Every Renovate bump pulls a new image and nothing removed the old one —
+  # 20 GB of the 46 GB OS disk by November 2026, which also starves the
+  # journal (SystemKeepFree in scripts/journald/10-dpv-retention.conf). Only
+  # after a healthy run, so a rollback above still finds the previous images
+  # locally; a manual rollback later pulls them again. A failed prune leaves
+  # the stack as it is, so it only warns.
+  log "removing images and build cache no container uses..."
+  docker image prune -af >>"$LOG_FILE" 2>&1 || log "WARNING: docker image prune failed"
+  docker builder prune -f >>"$LOG_FILE" 2>&1 || log "WARNING: docker builder prune failed"
+  log "disk: $(df -h / | awk 'NR == 2 { print $4 " free, " $5 " used" }')"
   log "=== update succeeded (now at ${NEW_COMMIT}) ==="
   exit 0
 fi
