@@ -108,11 +108,12 @@ resource "azurerm_linux_virtual_machine" "app" {
   # SKU rebuilds the VM. A different offer does not (ignore_changes below), it
   # only decides what the next rebuild gets: releases are upgraded in place
   # with do-release-upgrade. Keep the offer at the release the VM runs, so a
-  # rebuild brings back the same one — it moves to ubuntu-26_04-lts right after
-  # the upgrade in MIGRATION.md ("Ubuntu 26.04 für Livepatch").
+  # rebuild brings back the same one. The VM was created from 24.04 and upgraded
+  # to 26.04 on 2026-11-15 (MIGRATION.md, "Ubuntu 26.04 für Livepatch"); Azure
+  # still reports the 24.04 image for it, which ignore_changes absorbs.
   source_image_reference {
     publisher = "Canonical"
-    offer     = "ubuntu-24_04-lts"
+    offer     = "ubuntu-26_04-lts"
     sku       = local.vm_arm64 ? "server-arm64" : "server"
     version   = "latest"
   }
