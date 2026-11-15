@@ -1232,12 +1232,18 @@ eigenen Bibliotheken mit.
     Entfernt hat es unter anderem den Kernel 7.0.0-1014, Python 3.12 und
     `tzdata-legacy`; der Azure Monitor Agent blieb.
   - Die VM war schon neu gestartet, als Schritt 3 begann („Restart required").
-  - Ubuntu-Quellen jetzt `archive.ubuntu.com` (vorher `ports.ubuntu.com`), `sudo` ist
-    sudo-rs. Beides funktioniert und blieb so.
-  - chrony nimmt seitdem die NTS-Server von Canonical aus der neuen
-    `/etc/chrony/conf.d/ubuntu-nts.conf` statt der Host-Uhr `PHC0`, die als Rückfall
-    erreichbar bleibt. `leapsectz right/UTC` greift nicht mehr, weil `tzdata-legacy`
-    weg ist.
+  - Die Ubuntu-Quellen standen danach auf `archive.ubuntu.com` (vorher
+    `ports.ubuntu.com`); umgestellt auf Azures Spiegel `azure.archive.ubuntu.com`,
+    der 26.04 auch für ARM64 anbietet. `sudo` ist jetzt sudo-rs und blieb so.
+  - chrony nahm danach die NTS-Server von Canonical (`sources.d`, mit `prefer`) statt
+    der Host-Uhr `PHC0`, und `leapsectz right/UTC` griff nicht mehr, weil
+    `tzdata-legacy` weg war. Korrigiert in `chrony.conf`: `prefer` an der
+    `refclock`-Zeile, `leapseclist` statt `leapsectz`. Seitdem `#* PHC0` (±20 µs),
+    die NTS-Server bleiben als Rückfall.
+  - Aufgeräumt: Konfig-Reste von `keyboxd` und Kernel 6.17 (`apt purge`),
+    `ca-certificates.conf.dpkg-old`, `chrony.conf.ucf-dist`. Keine Pakete aus 24.04
+    mehr, `apt autoremove` hat nichts. `azuremonitoragent` und `azureotelcollector`
+    kommen aus keiner Quelle, gehören aber zur Azure-Erweiterung und bleiben.
 - Offen: Backups der ersten Nacht prüfen (Schritt 7), Snapshot nach dem
   Sonntags-Update am 22.11. löschen.
 
@@ -1283,7 +1289,7 @@ während des Upgrades weiter und wird erst in Schritt 3 sauber gestoppt.
 | Azure Backup | Die [Matrix](https://learn.microsoft.com/en-us/azure/backup/backup-support-matrix-iaas) verweist auf die [von Azure unterstützten Distributionen](https://learn.microsoft.com/en-us/azure/virtual-machines/linux/endorsed-distros), und dort steht Ubuntu 26.04 LTS. Enhanced Policy mit Premium SSD v2 bleibt unterstützt. |
 | cloud-init | Läuft beim Upgrade nicht, erst beim nächsten Neuaufbau (Risiko 3). Version 26.1, laut Release Notes keine Änderungen für Azure; das Template hat nichts Release-Spezifisches. |
 | Image | Nur für einen späteren Neuaufbau: `Canonical:ubuntu-26_04-lts:server-arm64` in `germanywestcentral`, Gen2, dieselben Features wie das 24.04-Image, kein Marketplace-Plan. |
-| Sonst in 26.04 | systemd 259 kennt nur noch cgroup v2 (nutzt 24.04 schon; ohne bricht das Upgrade vorher ab), OpenSSH 10.2 hat kein DSA mehr (die VM nutzt ed25519), Python 3.14. Die Coreutils kommen auch beim Upgrade aus Rust (uutils), außer `cp`, `mv` und `rm`; die Skripte nutzen nur gängige Optionen von `install`, `seq`, `chown` und `ln`. Zurück zu GNU: `sudo apt install coreutils-from-gnu coreutils-from-uutils- --allow-remove-essential`. chrony brachte schon das Azure-Image für 24.04 mit, mit der Uhr des Hyper-V-Hosts als Zeitquelle (`refclock PHC /dev/ptp_hyperv` in der vom Image geänderten `chrony.conf`); das Upgrade fragt deshalb nach dieser Datei (Schritt 2). Ob `sudo` danach sudo-rs ist, zeigt Schritt 4; zurück mit `sudo update-alternatives --set sudo /usr/bin/sudo.ws`. |
+| Sonst in 26.04 | systemd 259 kennt nur noch cgroup v2 (nutzt 24.04 schon; ohne bricht das Upgrade vorher ab), OpenSSH 10.2 hat kein DSA mehr (die VM nutzt ed25519), Python 3.14. Die Coreutils kommen auch beim Upgrade aus Rust (uutils), außer `cp`, `mv` und `rm`; die Skripte nutzen nur gängige Optionen von `install`, `seq`, `chown` und `ln`. Zurück zu GNU: `sudo apt install coreutils-from-gnu coreutils-from-uutils- --allow-remove-essential`. chrony brachte schon das Azure-Image für 24.04 mit, mit der Uhr des Hyper-V-Hosts als Zeitquelle (`refclock PHC /dev/ptp_hyperv` in der vom Image geänderten `chrony.conf`); das Upgrade fragt deshalb nach dieser Datei (Schritt 2). Die neuen NTS-Server von Canonical haben `prefer`, die Host-Uhr bekommt es in Schritt 7 dazu. Ob `sudo` danach sudo-rs ist, zeigt Schritt 4; zurück mit `sudo update-alternatives --set sudo /usr/bin/sudo.ws`. |
 
 ### Offene Risiken
 
@@ -1497,11 +1503,11 @@ cd /opt/dpv/compose && sudo docker compose ps
 
 Steht `~24.04` in der Kernel-Signatur, läuft noch ein Kernel aus 24.04, und den deckt
 Livepatch auf ARM64 nicht ab. Dann die Pakete aus `dpkg -l 'linux-image-*' | grep
-'~24.04'` entfernen und neu starten. Der Ubuntu-Spiegel steht danach womöglich auf
-`archive.ubuntu.com` statt auf Azures `azure.ports.ubuntu.com`: Der Upgrader schreibt
-ARM64-Quellen auf `ports.ubuntu.com` um (LP #2147101). Das funktioniert, solange
-`apt-get update` in Schritt 3 ohne Fehler lief. `update-alternatives` zeigt, ob `sudo`
-jetzt sudo-rs ist (Kompatibilität, „Sonst in 26.04").
+'~24.04'` entfernen und neu starten. Der Ubuntu-Spiegel steht danach auf
+`archive.ubuntu.com`: Der Upgrader schreibt ARM64-Quellen von `ports.ubuntu.com` dorthin
+um, weil 26.04 ARM64 im Hauptarchiv führt (LP #2147101). Das funktioniert; zurück auf
+Azures Spiegel geht es in Schritt 7. `update-alternatives` zeigt, ob `sudo` jetzt
+sudo-rs ist (Kompatibilität, „Sonst in 26.04").
 
 **5 — Postgres und Dienste.**
 
@@ -1542,6 +1548,24 @@ Neustarts.
   `terraform plan`: **No changes**. Will der Plan die VM ersetzen, nicht anwenden — dann
   greift `ignore_changes` nicht wie gedacht. README („Ubuntu 24.04 LTS" unter
   Architektur) und hier einen „Stand"-Absatz nachtragen.
+- Auf der VM nachziehen, was das Upgrade anders hinterlässt als ein neues Image:
+
+  ```
+  # Azures Spiegel statt archive.ubuntu.com (security.ubuntu.com bleibt)
+  sudo sed -i "s#http://archive.ubuntu.com/ubuntu#http://azure.archive.ubuntu.com/ubuntu#" /etc/apt/sources.list.d/ubuntu.sources
+  sudo apt-get update
+  # chrony: Host-Uhr bevorzugen (die NTS-Server aus sources.d haben auch prefer),
+  # Schaltsekunden aus tzdata statt aus right/UTC (tzdata-legacy ist weg)
+  sudo sed -i -e '/^refclock PHC/{/ prefer/!s/$/ prefer/;}' \
+    -e 's#^leapsectz right/UTC#leapseclist /usr/share/zoneinfo/leap-seconds.list#' /etc/chrony/chrony.conf
+  sudo systemctl restart chrony     # nach 1–2 Minuten: chronyc sources zeigt "#* PHC0"
+  # Reste: Konfig entfernter Pakete, Sicherungskopien der Konfigurationsfragen
+  dpkg -l | awk '/^rc/ {print $2}'  # mit sudo apt-get purge … entfernen
+  sudo find /etc -name "*.dpkg-old" -o -name "*.dpkg-dist" -o -name "*.ucf-dist"
+  ```
+
+  `apt list '?obsolete'` zeigt `azuremonitoragent` und `azureotelcollector`: Die
+  installiert die Azure-Erweiterung, sie bleiben.
 - Nach dem nächsten Sonntags-Update den Snapshot löschen:
   `az snapshot delete -g rg-dpv-core -n snap-dpv-os-pre-2604`.
 
