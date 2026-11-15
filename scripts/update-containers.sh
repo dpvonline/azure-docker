@@ -46,6 +46,18 @@ if ! git -C "$REPO_DIR" pull >>"$LOG_FILE" 2>&1; then
   exit 1
 fi
 
+# Host files (systemd, apt, journald, zram) live in the repo too but are not
+# covered by the compose pull below. Runs on every pull, before the early exit:
+# the weekly run is the only thing that ever brings them to the host. Failures
+# only warn, a broken host config must not block the container update.
+# Note: a run that pulls a new version of THIS file still executes the old one
+# (bash keeps the old inode open), so a changed call here applies one run later.
+if [ -f "$REPO_DIR/scripts/apply-host-config.sh" ]; then
+  if ! bash "$REPO_DIR/scripts/apply-host-config.sh" 2>&1 | tee -a "$LOG_FILE"; then
+    log "WARNING: apply-host-config.sh reported errors, continuing with the container update"
+  fi
+fi
+
 NEW_COMMIT="$(git -C "$REPO_DIR" rev-parse HEAD)"
 if [ "$NEW_COMMIT" = "$PREV_COMMIT" ]; then
   log "no changes since last run, nothing to do"
@@ -104,6 +116,16 @@ while [ "$elapsed" -lt "$HEALTH_TIMEOUT_SECONDS" ]; do
 done
 
 if $healthy; then
+  # Every Renovate bump pulls a new image and nothing removed the old one —
+  # 20 GB of the 46 GB OS disk by November 2026, which also starves the
+  # journal (SystemKeepFree in scripts/journald/10-dpv-retention.conf). Only
+  # after a healthy run, so a rollback above still finds the previous images
+  # locally; a manual rollback later pulls them again. A failed prune leaves
+  # the stack as it is, so it only warns.
+  log "removing images and build cache no container uses..."
+  docker image prune -af >>"$LOG_FILE" 2>&1 || log "WARNING: docker image prune failed"
+  docker builder prune -f >>"$LOG_FILE" 2>&1 || log "WARNING: docker builder prune failed"
+  log "disk: $(df -h / | awk 'NR == 2 { print $4 " free, " $5 " used" }')"
   log "=== update succeeded (now at ${NEW_COMMIT}) ==="
   exit 0
 fi

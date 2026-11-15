@@ -234,9 +234,8 @@ dauert nach den Messungen aus Phase 1 etwa 45–60 Minuten.
   war. Server und Resolver hatten den neuen Stand längst; nach ein paar Minuten bzw.
   `dscacheutil -flushcache` lief es. Für Cutover B: TTL mindestens einen Tag vorher
   senken, dann stellt sich die Frage nicht.
-- **Offen:** AKS steht mit 0 Replikas für Keycloak und Confluence, die PVCs sind
-  unangetastet. Abriss nach ein paar unauffälligen Tagen, bis dahin im alten Repo kein
-  `terraform apply`.
+- AKS stand danach mit 0 Replikas für Keycloak und Confluence, bis zum Abriss am 28.10.
+  (siehe „Zwischenschritt — AKS abreißen" nach Phase 4).
 
 ### Wer merkt was
 
@@ -382,8 +381,9 @@ sie, oder sie müssten zurückmigriert werden. Deshalb Schritt 10 gründlich.
 - AKS eine Woche auf 0 stehen lassen, PVCs **nicht** löschen. Dann **AKS abreißen** —
   das ist die große Einsparung. Außer `auth` und `wiki` bedient AKS nur noch Biber und
   pgAdmin (`anmeldung.`, `db.scout-tools.de`), beide werden nicht mehr gebraucht.
+  Ablauf: „Zwischenschritt — AKS abreißen" nach Phase 4.
 - Die Testnamen `auth.` und `wiki.scout-tools.de` bedient die VM nach Schritt 9 nicht
-  mehr; die DNS-Einträge dafür in Phase 5 aufräumen.
+  mehr; die DNS-Einträge dafür fallen mit dem AKS-Abriss weg.
 - `office.dpvonline.de` zeigt auf AKS, antwortet aber schon heute nicht (Stand
   23.09.). Auf AKS lief dafür nie etwas, nur eine Ingress-Regel; Collabora wird in
   Phase 3 auf der VM neu aufgesetzt.
@@ -437,7 +437,8 @@ als Datenplatte. Eine Garantie für den Tag des Umzugs ist das nicht (siehe Roll
   eingehängt. Seitdem wartet cloud-init bis zu 30 Minuten, `boot.sh` startet den
   Stack nur mit allen drei Mounts, und Docker selbst startet erst, wenn sie da sind
   (`scripts/systemd/docker.service.d/`).
-- Livepatch gibt es auf ARM64 nicht (`pro status`: `n/a`), ESM läuft.
+- Livepatch gibt es auf ARM64 nicht (`pro status`: `n/a`), ESM läuft. Livepatch für ARM64
+  kam erst mit Ubuntu 26.04, siehe „Ubuntu 26.04 für Livepatch".
 
 ### Wer merkt was
 
@@ -892,6 +893,73 @@ Nutzer betroffen.** Der Ablauf ist der aus Phase 3 mit denselben Skripten. Dauer
 letzte Delta-Lauf (am Vortag messen) plus ~15 Minuten für Dump, Konvertierung und
 Prüfen.
 
+### Stand 23.10.2026: durchgeführt
+
+- Vorher auf beiden Seiten auf Nextcloud **33.0.10** (PHP-Sicherheitsupdate). Der
+  Renovate-PR dafür (#35) sprang versehentlich auf 35 und wurde mit #37 auf 33.0.10
+  korrigiert, bevor die VM ihn zog. Seitdem öffnet Renovate je Major einen eigenen PR
+  (`separateMultipleMajor`).
+- `nc-sync.sh delta` vorab, im Fenster `nc-sync.sh cutover` in **27 Sekunden**
+  (10:20 UTC), dann Datenbank, Konvertierung, DNS. Bilder, PDFs und Office-Dateien
+  über Collabora funktionieren.
+- Lightsail steht im Wartungsmodus, der Host-Cron ist entfernt. Erreichbar per SSH
+  jetzt nur noch über die IP `3.65.3.213`, Port 1987 — `cloud.dpvonline.de` zeigt auf
+  die VM.
+- Aufgeräumt am 15.11., nach drei Wochen ohne Beschwerden (siehe „Danach"). Offen
+  ist nur noch Lightsail selbst.
+
+**Vorfall: PHP-Abstürze ab 23.10.** Nextcloud fiel wiederholt aus (Caddy: 502), bis
+der Container neu gestartet wurde. Ursache: Apache-Kindprozesse beendeten sich mit
+`Segmentation fault` — 502 am 23.10., 107 am 25.10., 68 am 28.10. Einmal begonnen,
+stürzte jeder neue Prozess ab, bis Apache neu startete; der Container selbst lief
+weiter (kein Neustart, kein OOM). Hauptverdacht ist der OPcache-JIT, den das Image
+einschaltet (`opcache.jit=1255`): sein Code liegt in gemeinsamem Speicher, und er lief
+erstmals unter echter Last, auf ARM64, mit dem neuen PHP 8.4.27. Bewiesen ist das
+nicht (kein Core-Dump, der Kernel protokollierte nichts). Seit 28.10. ist der JIT aus
+([`compose/nextcloud/zz-dpv-opcache-jit.ini`](compose/nextcloud/zz-dpv-opcache-jit.ini)).
+Stürzt es weiter ab: Core-Dumps aktivieren und die Stelle bestimmen.
+
+Nebenbefund: Am 27.10. war Postgres eine Stunde lang voll (236 abgelehnte
+Verbindungen, Standard 100). Seitdem `max_connections=200`.
+
+**Datenabgleich am 28.10.** Alle Dateien von Lightsail sind auf der VM, keine fehlt;
+12 wurden seit dem Cutover auf der VM geändert. Gegen die Datenbank geprüft: 4
+Papierkorb-Einträge ohne Datei wurden entfernt, 94 verwaiste `.part`-Dateien
+abgebrochener Uploads (291 MB) gelöscht.
+
+**SSO: seit 28.10. `user_oidc` statt `oidc_login`.** Umgestellt mit `nc-sso.sh`, das
+vorher Gruppen, Mitgliedschaften, Kontingent und E-Mail sicherte und auch zurückschalten
+konnte. Seit dem 15.11. ist `oidc_login` samt seinen Werten in `config.php` und in der
+Datenbank entfernt; vom Skript blieb der Gruppen-Snapshot als
+[`nc-groups.sh`](scripts/nextcloud-migration/nc-groups.sh). Der Provider `DPV` nutzt
+denselben Keycloak-Client `nextcloud` und dessen Secret. Das Secret liegt verschlüsselt in
+`oc_user_oidc_providers`, der Schlüssel dafür ist `secret` in `config.php`:
+
+```
+$O user_oidc:provider DPV --clientid=nextcloud --clientsecret='<Secret>' \
+  --discoveryuri=https://auth.dpvonline.de/realms/DPV/.well-known/openid-configuration \
+  --scope='openid profile email' --unique-uid=0 \
+  --mapping-uid=preferred_username --mapping-display-name=nickname \
+  --mapping-email=email --mapping-quota=nextcloudquota --mapping-groups=roles \
+  --group-provisioning=1 --group-whitelist-regex='/^(?!admin$)/' --send-id-token-hint=1
+$O config:system:set user_oidc enrich_login_id_token_with_userinfo --type=boolean --value=true
+```
+
+- `--unique-uid=0` und `soft_auto_provision` (Standard) übernehmen die bestehenden
+  Konten mit ihrer ID. In `oc_user_oidc` landen nur Konten, die `user_oidc` neu
+  angelegt hat (bis 15.11. eines).
+- Gruppen kommen bei jedem Login aus `roles`. Was dort fehlt, entfernt `user_oidc` —
+  außer `admin`, die bleibt lokal (Whitelist). Daran hängen die Gruppenordner. Bis
+  15.11. hat dabei niemand eine Gruppe verloren. Vor Änderungen an Rollen oder Mappern
+  in Keycloak `nc-groups.sh snapshot`, danach `diff`; `restore … --apply` stellt
+  Mitgliedschaften wieder her.
+- In Keycloak ist zusätzlich `https://cloud.dpvonline.de/apps/user_oidc/code` als
+  Redirect-URI eingetragen.
+- `/login` leitet direkt zu Keycloak (`allow_multiple_user_backends=0`), die lokale
+  Anmeldung bleibt unter `/login?direct=1` erreichbar.
+- Der Desktop-Client öffnet zum Anmelden den Browser und landet nicht mehr auf der
+  Nextcloud-Passwortmaske.
+
 ### Vorbereitung
 
 - **Mindestens einen Tag vorher bei IONOS** die TTL von `cloud.` und `office.dpvonline.de`
@@ -929,16 +997,632 @@ beide aus dem eingefrorenen Stand.
 - Lightsail **im Wartungsmodus** weiterlaufen lassen, bis alles durchgetestet ist. So
   bleibt es Rollback-Ziel, aber Clients mit altem DNS-Eintrag schreiben nicht mehr
   dorthin.
-- Aufräumen, wenn alles als funktionsfähig gemeldet ist:
+- Aufräumen, wenn alles als funktionsfähig gemeldet ist — *erledigt am 15.11.*, bis
+  auf die zwei Punkte in Keycloak:
   - `3.65.3.213/32` aus `ADMIN_IP_CIDRS`, `terraform apply`
-  - Migrationsschlüssel aus `~dpvadmin/.ssh/authorized_keys` der VM, auf Lightsail
-    `/root/.ssh/dpv-migration_ed25519*` löschen
-  - `docker rm -f nextcloud-mariadb`, `/data/apps/nextcloud-mariadb`,
-    `/root/config.php.before-pgsql.*`
-  - Keycloak-Client `nextcloud-test`
+  - Migrationsschlüssel aus `~dpvadmin/.ssh/authorized_keys` der VM. Auf Lightsail
+    blieb `/root/.ssh/dpv-migration_ed25519*` liegen, die Instanz war per SSH nicht mehr
+    erreichbar; der Schlüssel öffnet nichts mehr und geht mit der Instanz.
+  - `nextcloud-mariadb` samt Image und `/data/apps/nextcloud-mariadb`,
+    `/root/config.php.before-pgsql*` und die Migrationsreste in `/root`
+  - `oidc_login`: App, die `oidc_login_*`-Werte aus `config.php` und seine Zeilen in
+    `oc_appconfig`/`oc_preferences`. `occ app:remove` entfernt nur aktivierte Apps,
+    deshalb erst die Werte löschen (dann leitet sie nichts mehr um), kurz aktivieren,
+    entfernen. `/root/sso` und `/root/verify` auf der VM
+  - **Offen, in Keycloak:** Client `nextcloud-test` löschen, im Client `nextcloud` die
+    alte Redirect-URI `/apps/oidc_login/oidc` entfernen
 - Beim Abschalten von Lightsail **auch beide EFS löschen** (Nutzerdaten und Backups,
   zusammen >300 GB) — sie hängen nicht an der Instanz und kosten allein weiter. Das
   EFS hat ein eigenes AWS-Backup; dessen Aufbewahrung vorher prüfen.
+
+---
+
+## Zwischenschritt — AKS abreißen
+
+**Ziel:** Die Resource Group `Infra` ist weg, die Zone `scout-tools.de` liegt in
+`rg-dpv-core` und gehört diesem Repo, `azure-infrastructure` ist archiviert. Das spart
+~155 €/Monat. Keine Nutzer betroffen.
+
+### Stand 28.10.2026: durchgeführt
+
+- Den Cluster hat Philip am 28.10. von Hand gelöscht. Mit ihm ist die Gruppe
+  `MC_Infra_Kubernetes-Cluster_germanywestcentral` weg: Knoten, Load Balancer und alle
+  Platten, also auch das Postgres mit der Biber-Datenbank. Die Schritte unten liefen am
+  selben Tag.
+- Übrig waren in `Infra`: Registry `biber`, Log Analytics `kubernetes-analytics`,
+  Prometheus-Workspace `kubernetes-monitoring` (mit der verwalteten Gruppe
+  `MA_kubernetes-monitoring_…`), Datensammelregeln und -endpunkt, acht
+  Prometheus-Regelgruppen (sechs davon aus dem Portal, nicht aus Terraform), VNet
+  `k8s-network`, die beiden früheren Ingress-Adressen, ein Azure-Migrate-Projekt
+  `keycloak` und die Zone `scout-tools.de`. Bis auf die Zone ist alles mit der Gruppe
+  gelöscht; verwaiste Rollenzuweisungen blieben keine.
+- Das alte Repo wurde nicht zurückgeschnitten: Sein State war vom 24.09. und kannte den
+  Cluster noch, ein `terraform apply` hätte AKS neu aufgebaut. Stattdessen ging alles
+  Übrige mit der Resource Group. Seit Cutover B zeigt `office.dpvonline.de` auf die VM,
+  die früheren Ingress-Adressen konnten also mit weg, ohne dass ein Name ins Leere zeigt.
+- In der Zone stand außerdem ein A-Record `agent` auf `3.122.236.130` (AWS, antwortete
+  nicht), aus keinem der beiden Repos. Gelöscht: Ein Name auf eine freigegebene
+  Cloud-Adresse lässt sich von deren nächstem Inhaber übernehmen.
+- Die Zone liegt in `rg-dpv-core`, mit unveränderten Nameservern (`ns1-06` bis `ns4-06`)
+  und nur noch NS und SOA. Import und Tags mit #45.
+- Der Service Principal `Terraform` des alten Repos (Contributor und User Access
+  Administrator auf der Subscription) ist gelöscht; sein einziges Secret war das aus der
+  alten `variables.tfvars`. `azure-infrastructure` ist archiviert.
+- **Offen:** Die lokalen Dateien aus Schritt 6 löschen, vorher Confluence-Lizenz und
+  SMTP-Passwort aus der alten `variables.tfvars` sichern, falls sie sonst nirgends
+  stehen. Der Hinweis im README des alten Repos fehlt; zum Bearbeiten das Repo kurz
+  entarchivieren.
+
+### Warum die Zone umzieht und nicht neu entsteht
+
+`scout-tools.de` wird weiter gebraucht, derzeit aber ohne eigene Records. Die Zone wird
+nach `rg-dpv-core` **verschoben**: Laut [DNS-FAQ](https://learn.microsoft.com/en-us/azure/dns/dns-faq)
+bleiben die zugewiesenen Nameserver dabei gleich. Eine neue Zone gleichen Namens bekäme
+andere, und die Domain löste nicht mehr auf, bis die Delegation beim Registrar angepasst
+ist. Aus demselben Grund steht die Zone in [`terraform/dns.tf`](terraform/dns.tf) unter
+`prevent_destroy`.
+
+Vorher fallen alle Records weg, die nichts mehr bedienen: `auth`, `wiki`, `cloud` und
+`office` (Testnamen aus diesem Repo) sowie `@`, `db` und `anmeldung` (Biber und pgAdmin
+aus dem alten Repo), jeweils A und AAAA.
+
+### Schritte
+
+Nicht zwischen 01:00 und 04:30 UTC: Während des Umzugs sperrt Azure Quell- und
+Zielgruppe für Änderungen, und das könnte Azure Backup in `rg-dpv-core` stören.
+
+| # | Schritt | Rollback |
+|---|---|---|
+| 1 | Vorab: Locks prüfen, Nameserver und Records notieren | – |
+| 2 | Records löschen: 8 per Terraform, 6 per `az` | nicht nötig, nichts nutzt sie |
+| 3 | Zone verschieben, Nameserver vergleichen | zurückverschieben |
+| 4 | Zone in diesem Repo importieren, vom PR-Branch `apply`, PR mergen | wie 3 |
+| 5 | Resource Group `Infra` löschen — **ab hier kein Zurück** | – |
+| 6 | Altes Repo archivieren, lokal aufräumen | – |
+
+**1 — Vorab.**
+
+```
+az lock list -g Infra -o table
+az lock list -g rg-dpv-core -o table
+az network dns zone show -g Infra -n scout-tools.de --query nameServers -o tsv
+az network dns record-set list -g Infra -z scout-tools.de --query "[].{name:name, type:type}" -o table
+az role assignment list --scope "$(az network dns zone show -g Infra -n scout-tools.de --query id -o tsv)" -o table
+```
+
+Beide Lock-Listen müssen leer sein, ein Lock auf einer der Gruppen verhindert den Umzug.
+Die vier Nameserver notieren. Rollenzuweisungen direkt auf der Zone ziehen nicht mit um;
+steht dort etwas, nach Schritt 3 neu anlegen.
+
+**2 — Records.** In diesem Repo, noch auf `main`, also mit dem alten `dns.tf`:
+
+```
+cd terraform
+terraform destroy \
+  -target=azurerm_dns_a_record.auth   -target=azurerm_dns_aaaa_record.auth \
+  -target=azurerm_dns_a_record.wiki   -target=azurerm_dns_aaaa_record.wiki \
+  -target=azurerm_dns_a_record.cloud  -target=azurerm_dns_aaaa_record.cloud \
+  -target=azurerm_dns_a_record.office -target=azurerm_dns_aaaa_record.office
+```
+
+Erwartet: **8 to destroy**, nichts sonst. Dann die drei Namen aus dem alten Repo:
+
+```
+for n in @ db anmeldung; do
+  az network dns record-set a    delete -g Infra -z scout-tools.de -n "$n" --yes
+  az network dns record-set aaaa delete -g Infra -z scout-tools.de -n "$n" --yes
+done
+az network dns record-set list -g Infra -z scout-tools.de --query "[].{name:name, type:type}" -o table
+```
+
+Übrig bleiben NS und SOA, dazu alles aus Schritt 1, was nicht zu AKS gehörte; das zieht
+mit um.
+
+**3 — Umzug.**
+
+```
+az resource move --destination-group rg-dpv-core \
+  --ids "$(az network dns zone show -g Infra -n scout-tools.de --query id -o tsv)"
+az network dns zone show -g rg-dpv-core -n scout-tools.de --query nameServers -o tsv
+dig +noall +answer SOA scout-tools.de @8.8.8.8
+```
+
+Dauert ein paar Minuten. Die Nameserver müssen dieselben sein wie in Schritt 1, und
+`dig` muss eine Antwort zeigen. Sonst hier anhalten: `Infra` steht noch, und
+`az resource move --destination-group Infra …` bringt die Zone zurück.
+
+**4 — Übernehmen.** PR-Branch auschecken, in `terraform.tfvars` die Zeile
+`OLD_REPO_RESOURCE_GROUP` löschen (sonst nur eine Warnung), dann:
+
+```
+terraform import azurerm_dns_zone.scout_tools \
+  "/subscriptions/$(az account show --query id -o tsv)/resourceGroups/rg-dpv-core/providers/Microsoft.Network/dnsZones/scout-tools.de"
+terraform plan
+```
+
+Erwartet: **0 to add, 1 to change, 0 to destroy**, die Zone bekommt die Tags aus `TAGS`.
+Steht dort ein `create` für die Zone, hat der Import nicht gegriffen: **nicht anwenden**,
+Terraform legte sonst eine zweite Zone mit anderen Nameservern an. Passt der Plan,
+`terraform apply`, PR mergen, `git checkout main && git pull`. Die VM braucht nichts
+davon.
+
+**5 — `Infra` löschen.**
+
+```
+az resource list -g Infra --query "[].{name:name, type:type}" -o table
+az group delete -n Infra
+az group list --query "[].name" -o tsv
+az role assignment list --all --query "[?principalName==''].{role:roleDefinitionName, scope:scope}" -o table
+```
+
+In der ersten Liste darf `scout-tools.de` **nicht** mehr stehen. `az group delete` fragt
+nach und braucht ein paar Minuten; `MA_kubernetes-monitoring_…` sollte mit dem
+Monitor-Workspace verschwinden. Danach bleiben `rg-dpv-core`, `rg-dpv-tfstate`,
+`AzureBackupRG_…` und `NetworkWatcherRG`. Die letzte Abfrage zeigt Rollenzuweisungen
+gelöschter Identitäten, etwa die der Cluster-Identität; was sich auf `Infra` bezieht,
+mit `az role assignment delete --ids …` entfernen.
+
+**6 — Altes Repo.**
+
+- Im README von `azure-infrastructure` auf dieses Repo verweisen, dann
+  `gh repo archive dpvonline/azure-infrastructure`.
+- Den Service Principal des alten Repos (`CLIENT_ID` in dessen `variables.tfvars`)
+  löschen, wenn ihn sonst nichts nutzt:
+  `az role assignment list --assignee <CLIENT_ID> --all -o table`, dann
+  `az ad app delete --id <CLIENT_ID>`.
+- Lokal im alten Repo-Verzeichnis löschen: `terraform.tfstate*` und `variables.tfvars`
+  (Passwörter im Klartext), beide kubeconfig-Dateien, die `keycloak*.dump`
+  (Passwort-Hashes).
+
+### Rollback
+
+Bis Schritt 4 steht `Infra` noch, die Zone lässt sich zurückverschieben. Schritt 5 ist
+endgültig; gebraucht wird von dem, was dann noch in `Infra` liegt, nichts mehr.
+
+---
+
+## Zwischenschritt — Ubuntu 26.04 für Livepatch
+
+**Ziel:** `vm-dpv-core` läuft auf Ubuntu 26.04 LTS (`resolute`) statt 24.04, per
+`do-release-upgrade` auf der laufenden VM. Dann greift Livepatch aus dem schon
+angemeldeten Ubuntu Pro: Kernel-Sicherheitsfixes wirken ohne Neustart, und die VM startet
+für Kernel-Updates nur noch einmal im Monat neu statt jede Woche (siehe „Neustarts
+danach").
+**Wartungsfenster, Nutzer betroffen:** Das Upgrade selbst läuft neben dem Stack. Weg sind
+Anmeldung, Wiki, Nextcloud und Collabora erst am Ende, für Docker-Update und Neustart,
+etwa 15–20 Minuten. Ein Fenster von 2 Stunden ankündigen, damit der Rückweg hineinpasst.
+
+**Warum 26.04:** Livepatch für ARM64 gibt es erst ab Ubuntu 26.04. Für ältere Releases
+fehlte Kernel und Werkzeugen die nötige Unterstützung
+([Ankündigung vom 23.06.2026](https://canonical.com/blog/canonical-announces-live-kernel-patching-for-arm64)),
+deshalb zeigt `pro status` seit dem Umzug auf ARM64 bei Livepatch `n/a`. Laut
+[Kernel-Tabelle](https://ubuntu.com/security/livepatch/docs/client/reference/platform/supported-kernels/)
+ist für 26.04 auf arm64 der Kernel 7.0 (GA) abgedeckt, in den Varianten aws, **azure**,
+fips, gcp, generic, gke, ibm, lowlatency und oracle. Damit ist `linux-azure` abgedeckt,
+den das Azure-Image mitbringt (in `resolute-updates` derzeit `7.0.0-1019`). Für 24.04
+hat die Tabelle keine einzige arm64-Zeile.
+
+Was Livepatch nicht leistet: Es behebt nur Lücken der Stufen hoch und kritisch, und
+jeder Kernel-Build bekommt Patches nur 9–13 Monate ab seinem Erscheinen (7.0 auf 26.04:
+13). Neustarts in einen neuen Kernel bleiben nötig, nur seltener und geplant.
+
+Schneller wird die VM durch 26.04 nicht spürbar. Was ARM64 angeht, steckt das meiste im
+Kernel, und der ist auch auf 24.04 schon 7.0 (Risiko 1); die Container bringen ihre
+eigenen Bibliotheken mit.
+
+### Upgrade auf der VM statt Neuaufbau
+
+Beides ginge: `do-release-upgrade` bietet 24.04 → 26.04.1 seit dem 29.09.2026 an, und
+Terraform kann die VM mit dem 26.04-Image neu bauen wie beim „Umzug auf ARM64".
+Empfehlung: **Upgrade auf der VM**, mit einem Snapshot der Systemplatte als Rückweg.
+
+| | Upgrade auf der VM | Neuaufbau mit dem 26.04-Image |
+|---|---|---|
+| Rückweg | Systemplatte aus dem Snapshot einsetzen (Rollback A), etwa 20 Min. In Azure ein Standardvorgang, hier aber nie geübt | Neuaufbau mit 24.04, wie Rollback A beim ARM64-Umzug |
+| Verloren | nichts | alles auf der Systemplatte: Host-Keys, Zertifikate, Docker-Images, Container-Logs im Journal, Handarbeit außerhalb von cloud-init |
+| Ausfall | 15–20 Min. für Docker-Update und Neustart; das Upgrade läuft neben dem Stack | 30–45 Min. (24.09.: 40) |
+| Ubuntu Pro | bleibt angemeldet | neue Maschine, braucht einen freien Platz im Abo |
+| cloud-init auf 26.04 | läuft erst beim nächsten Neuaufbau (Risiko 3) | läuft jetzt einmal durch, im geplanten Fenster |
+| Docker, Azure CLI | Das Upgrade schaltet beide Quellen ab, Schritt 3 stellt sie auf `resolute` um | kommen gleich aus den `resolute`-Quellen |
+| Terraform | Azure meldet weiter das 24.04-Image, das Offer steht deshalb in `ignore_changes` | `vm.tf` beschreibt die VM, wie sie ist |
+| Ergebnis | bisherige Konfiguration mit neuen Paketen | wie eine Neuinstallation |
+
+Den Ausschlag geben die ersten drei Zeilen. Die VM läuft stabil, und das Upgrade lässt
+alles auf ihr stehen. Der Snapshot gibt ihm einen Rückweg, der kürzer ist als ein
+Neuaufbau. Der Preis ist Risiko 3: Ob cloud-init auf 26.04 durchläuft, zeigt erst der
+nächste Neuaufbau. Damit ein Neuaufbau trotzdem jederzeit das richtige Release bekommt,
+legt das Offer in `terraform/vm.tf` fest, mit welchem Image er startet; an der laufenden
+VM ändert es nichts.
+
+Für Postgres ändert sich praktisch nichts. Datenverzeichnis, Container und Image
+`postgres:18` bleiben, und der Kernel ist schon heute 7.0 (Risiko 1). Postgres läuft
+während des Upgrades weiter und wird erst in Schritt 3 sauber gestoppt.
+
+### Kompatibilität (geprüft am 28.10. und 15.11.2026)
+
+| Was | Ergebnis |
+|---|---|
+| Upgrade-Pfad | `do-release-upgrade` bietet 24.04 → 26.04 seit 26.04.1 an (29.09.2026), die Azure-Images stehen auf `Prompt=lts`. |
+| Livepatch | Kernel 7.0 GA, Variante `azure`, siehe oben. Pro bleibt beim Upgrade angemeldet. Livepatch war auf 24.04 `n/a`, und der Pro-Client schaltet es nach einem Release-Upgrade nicht selbst ein ([`upgrade_lts_contract.py`](https://github.com/canonical/ubuntu-pro-client/blob/main/uaclient/upgrade_lts_contract.py) schaltet nur ab, was nicht mehr passt): Schritt 6. |
+| Fremdquellen | Laut Quellcode des Upgraders ([`DistUpgradeController.py`](https://git.launchpad.net/ubuntu-release-upgrader/tree/DistUpgrade/DistUpgradeController.py?h=ubuntu/resolute), `migrateToDeb822Sources`) wird `docker.list` zu `docker.list.disabled`, und `azure-cli.sources` bekommt `Enabled: no`. Die Pakete selbst bleiben: Pakete fremder Herkunft nimmt es seit 25.10.1 von „Remove obsolete packages" aus (LP #2107657). Schritt 3 schreibt beide Quellen neu. |
+| Docker-Repo | `download.docker.com/linux/ubuntu` hat `resolute` für arm64, mit denselben Versionen wie `noble` (`docker-ce` 29.9.2, Compose 5.6.1, containerd 2.4.2). Schritt 3 schreibt die Quelle mit derselben Zeile wie cloud-init neu. |
+| Azure CLI | `InstallAzureCLIDeb` nimmt den eigenen Codenamen, wenn er unter `packages.microsoft.com/repos/azure-cli/dists/` steht, sonst still `jammy`. `resolute` steht dort, mit `azure-cli` 2.91 für arm64. Das Skript schreibt `azure-cli.sources` komplett neu, ohne `Enabled: no`; Schritt 3 führt es noch einmal aus. |
+| unattended-upgrades | Die Muster in `scripts/apt/52dpv-unattended-upgrades` nutzen `${distro_codename}`. Die Release-Dateien beider Fremdquellen (`Origin: Docker` bzw. `Origin: azure-cli resolute`, `Suite: resolute`) passen dazu. |
+| Azure Monitor Agent | Ubuntu 26.04 LTS steht in der [Liste](https://learn.microsoft.com/en-us/azure/azure-monitor/agents/azure-monitor-agent-supported-operating-systems), „also supported on ARM64-based machines". Die Extension bleibt installiert; ob Daten ankommen, prüft Schritt 7. |
+| Azure Backup | Die [Matrix](https://learn.microsoft.com/en-us/azure/backup/backup-support-matrix-iaas) verweist auf die [von Azure unterstützten Distributionen](https://learn.microsoft.com/en-us/azure/virtual-machines/linux/endorsed-distros), und dort steht Ubuntu 26.04 LTS. Enhanced Policy mit Premium SSD v2 bleibt unterstützt. |
+| cloud-init | Läuft beim Upgrade nicht, erst beim nächsten Neuaufbau (Risiko 3). Version 26.1, laut Release Notes keine Änderungen für Azure; das Template hat nichts Release-Spezifisches. |
+| Image | Nur für einen späteren Neuaufbau: `Canonical:ubuntu-26_04-lts:server-arm64` in `germanywestcentral`, Gen2, dieselben Features wie das 24.04-Image, kein Marketplace-Plan. |
+| Sonst in 26.04 | systemd 259 kennt nur noch cgroup v2 (nutzt 24.04 schon; ohne bricht das Upgrade vorher ab), OpenSSH 10.2 hat kein DSA mehr (die VM nutzt ed25519), Python 3.14. Die Coreutils kommen auch beim Upgrade aus Rust (uutils), außer `cp`, `mv` und `rm`; die Skripte nutzen nur gängige Optionen von `install`, `seq`, `chown` und `ln`. Zurück zu GNU: `sudo apt install coreutils-from-gnu coreutils-from-uutils- --allow-remove-essential`. chrony gibt es nur bei Neuinstallationen, das Upgrade behält `systemd-timesyncd`. Ob `sudo` danach sudo-rs ist, zeigt Schritt 4; zurück mit `sudo update-alternatives --set sudo /usr/bin/sudo.ws`. |
+
+### Offene Risiken
+
+1. **Postgres unter Linux 7.0 — kein Risiko des Upgrades.** Ubuntu führt als bekanntes
+   Problem, dass Linux 7.0 Durchsatz und Latenz von Postgres deutlich verschlechtern
+   kann; Systeme mit Huge Pages sind nicht betroffen. Ursache laut
+   [LKML-Thread](https://lkml.iu.edu/hypermail/linux/kernel/2604.0/06945.html): Beim
+   Verdrängen eines Puffers (`StrategyGetBuffer`) hält Postgres einen Spinlock, und mit
+   4-KB-Seiten fallen genau dort viele Page Faults an. Seit 7.0 gibt es kein
+   `PREEMPT_NONE` mehr, der Kernel unterbricht den Halter öfter, und die Wartenden
+   drehen leer. Gemessen wurde halber Durchsatz auf 96 vCPU (Graviton4, also auch
+   ARM64) mit 1024 Clients und ~95 GB `shared_buffers`.
+   - **Kernel:** Kein Fix gefunden. Der Patch, der `PREEMPT_NONE` zurückholen sollte,
+     wurde im Thread abgelehnt und ist nach allem Auffindbaren nicht gemergt. Die
+     Alternative der Kernel-Seite, die rseq-Zeitscheibenverlängerung, ist
+     standardmäßig aus, und Postgres nutzt sie nicht. Ubuntu führt das Problem weiter
+     ohne Kernel-Update.
+   - **Postgres-Update:** Ein neueres 18.x hilft nicht, denn an dieser Stelle wurde in
+     18.x nichts geändert (die ARM64-Spinlock-Verbesserung steckt schon in 18.0).
+     Postgres 19 entfernt diesen Spinlock (Commit `2c78940`, „Remove freelist, always
+     use clock-sweep"), erscheint aber erst am 19.11.2026, ist unter Linux 7.x nicht
+     gemessen und ein Major-Upgrade (`pg_upgrade`, Freigaben von Keycloak, Confluence,
+     Nextcloud). Ohne Huge Pages ist ein großer Puffer laut Andres Freund auch dort
+     „utterly terrible" (etwa ein Drittel des Durchsatzes). Kein Grund, 19 deswegen
+     vorzuziehen.
+   - **Hier:** Die VM läuft schon auf 7.0. `uname -r` zeigte am 28.10.
+     `7.0.0-1017-azure`, denn `linux-azure` ist auch auf 24.04 bei 7.0 angekommen. Das
+     Upgrade ändert daran nichts, ein Rückweg auf 24.04 auch nicht. `shared_buffers`
+     steht auf dem Standard von 128 MB, bei 4 vCPU. Laut Freund tritt das Problem „with
+     a smaller buffer pool" nicht auf; für so kleine Maschinen gibt es aber keine
+     Messung. Ob es hier durchschlägt, zeigt der Abschnitt „Huge Pages für Postgres".
+   - **Gegenmittel** sind Huge Pages, als eigene Änderung, unabhängig vom Upgrade (siehe
+     „Huge Pages für Postgres"). Sie wirken unabhängig von Postgres-Version und Kernel.
+2. **Kernelwechsel innerhalb von 26.04.** `linux-azure` zieht während eines LTS auf
+   neuere Kernel nach: bei 24.04 von 6.8 bis heute auf 7.0, während
+   `linux-azure-lts-24.04` bei 6.8 blieb. Bei 26.04 voraussichtlich ab 26.04.2 im Februar
+   2027. Ob Livepatch diese Kernel auf arm64 abdeckt, steht noch nicht in Canonicals
+   Tabelle; auf x86 tut es das, mit 9 statt 13 Monaten. Fehlt die Abdeckung, startet die
+   VM wieder wöchentlich neu (siehe „Neustarts danach") — sicher, nur häufiger.
+   Gegenmittel: auf den GA-Kernel festlegen, also `linux-azure-lts-26.04` installieren
+   und die übrigen `linux-*azure`-Metapakete entfernen (`dpkg -l 'linux-*azure*'`). Auf
+   26.04 sind heute beide derselbe Kernel. Im Februar 2027 prüfen.
+3. **cloud-init auf 26.04 ist nicht erprobt.** Beim Upgrade läuft es nicht, zum ersten
+   Mal also beim nächsten Neuaufbau, womöglich im Ernstfall. Geprüft ist es nur auf dem
+   Papier (Kompatibilität oben). Scheitert es dann, ist ein Neuaufbau mit 24.04 der
+   Ausweg (Rollback B); das Template ist für beide Releases dasselbe.
+4. **Das Upgrade bleibt auf halbem Weg stehen**, etwa an einem Paketfehler. Dann ist die
+   Systemplatte halb 24.04, halb 26.04. Der Stack läuft womöglich weiter, aber nach einem
+   Neustart ist offen, ob die VM wieder hochkommt. Nicht neu starten, Rollback A.
+5. **Azure Backup auf 26.04.** Laut Liste unterstützt, belegt erst durch den ersten Job
+   nach dem Upgrade (Schritt 7). Scheitert er, gilt dasselbe wie beim ARM64-Umzug:
+   nichts löschen.
+6. **Keine Hardware für den Rückweg.** Das Upgrade startet die VM nur neu, und Rollback A
+   hält sie nur an; beide behalten ihre Hardware. Nur wenn Azure den Plattentausch erst
+   nach einem Freigeben (deallocate) annimmt, kann es danach in Zone 1 gerade keine
+   `D4ps_v6` geben (siehe Rollback A).
+
+### Wer merkt was
+
+| Zeitraum | Wiki | Anmeldung (Keycloak) | Nextcloud, Collabora |
+|---|---|---|---|
+| Schritt 1 und 2 | normal | normal | normal |
+| Schritt 3 und 4 | weg | **weg** | weg; Desktop-Clients synchronisieren danach von selbst weiter |
+| Schritt 5 | erreichbar, wird geprüft | erreichbar, wird geprüft | erreichbar, wird geprüft |
+| ab Schritt 6 | normal | normal | normal |
+
+### Vorbereitung
+
+- Diesen PR mergen. Er ändert an der VM nichts; `terraform plan` muss vorher und
+  nachher **No changes** zeigen, sonst erst klären, was da ansteht.
+- **Neustart-Regel auf der VM:** Die Unit spielt `apply-host-config.sh` mit dem
+  Sonntags-Update ein, das den Commit zieht (README, „Rollout auf der VM").
+  `grep reboot-due /etc/systemd/system/dpv-reboot-if-required.service` muss eine Zeile
+  zeigen. Fehlt sie, obwohl das Update den Commit schon gezogen hat, das Skript einmal
+  von Hand starten: `sudo /opt/dpv/scripts/apply-host-config.sh`. Kein eigenes
+  `git pull` vorab, sonst lässt der nächste Update-Lauf gemergte Container-Bumps liegen.
+- Platz auf der Systemplatte: `df -h /` sollte mindestens 5 GB frei zeigen. Das Upgrade
+  prüft das selbst und bricht vorher ab, aber dann ist das Fenster vertan.
+- Kontingent für eine ARM64-Ausweichgröße (Rollback A) prüfen:
+  `az vm list-usage -l germanywestcentral -o table | grep -iE "ps.*family|regional"`.
+  Am 28.10.: `Dpsv6` 4 von 350, `Bpsv2` 0 von 65, regional 4 von 13 vCPUs.
+- Fenster ankündigen: werktags, am besten Montag oder Dienstag, denn Rollback A gilt nur
+  bis zum nächsten Sonntags-Update. **Nicht** zwischen 00:30 und 04:30 UTC (OS-Updates,
+  Azure Backup, pgBackRest, Confluence-Prune), und nicht am Tag nach einem Major-Update
+  aus Renovate.
+- Eigene IP in `ADMIN_IP_CIDRS`, SSH auf die VM geht, `az` ist lokal angemeldet.
+
+### Schritte
+
+| # | Schritt | Dauer | Rollback |
+|---|---|---|---|
+| 1 | Updates einspielen, Full-Backup, Snapshot der Systemplatte | 10 Min. | – |
+| 2 | `do-release-upgrade`, der Stack läuft weiter | 30–60 Min. | **A** |
+| 3 | Stack stoppen, Quellen auf `resolute`, Docker aktualisieren, Neustart — **Ausfall beginnt** | 10 Min. | A |
+| 4 | Release, Kernel, Mounts, Stack prüfen | 5 Min. | A |
+| 5 | Postgres und Dienste prüfen | 15 Min. | A |
+| 6 | Livepatch einschalten und prüfen | 5 Min. | – |
+| 7 | Freigeben, Nacharbeiten, Terraform nachziehen | 15 Min. | A bis Sonntag, danach B |
+
+**1 — Updates und Sicherung.** Auf der VM:
+
+```
+. /etc/os-release; echo "$VERSION_ID"                # 24.04
+sudo systemctl stop apt-daily.timer apt-daily-upgrade.timer
+sudo apt-get update && sudo apt-get -y dist-upgrade
+cat /run/reboot-required.pkgs 2>/dev/null
+df -h /
+sudo /opt/dpv/scripts/pgbackrest-full-backup.sh
+```
+
+Die beiden Timer würden sonst womöglich mitten im Upgrade Pakete einspielen wollen; der
+Neustart in Schritt 3 startet sie wieder. `do-release-upgrade` startet nicht, solange
+Updates offen sind oder ein Neustart für `linux-image-*`, `linux-base` oder `libc6`
+aussteht
+([Quelle](https://git.launchpad.net/ubuntu-release-upgrader/tree/do-release-upgrade?h=ubuntu/noble)).
+Zeigt `cat` eines davon, jetzt neu starten (`sudo reboot`, ein paar Minuten Ausfall) und
+danach weitermachen.
+
+Dann lokal den Snapshot der Systemplatte:
+
+```
+RG=rg-dpv-core
+OSDISK=$(az vm show -g $RG -n vm-dpv-core --query storageProfile.osDisk.managedDisk.id -o tsv)
+az snapshot create -g $RG -n snap-dpv-os-pre-2604 --source "$OSDISK" --incremental true \
+  --query "{name:name, state:provisioningState}" -o table
+```
+
+Er entsteht bei laufender VM. Für die Systemplatte reicht das, denn die Daten liegen auf
+den Datenplatten, und die fasst das Upgrade nicht an. Inkrementell kostet er nur, was
+sich danach ändert, also Cent-Beträge.
+
+**2 — Upgrade.** Auf der VM:
+
+```
+sudo do-release-upgrade
+```
+
+- Es fragt, ob es über SSH weitermachen soll, und läuft dann in `screen`. Reißt die
+  Verbindung ab, neu anmelden und `sudo screen -d -r`; das Protokoll steht in
+  `/var/log/dist-upgrade/`. Den Ersatz-SSH-Port 1022, den es startet, lässt die NSG
+  nicht durch.
+- Es meldet, dass es die Fremdquellen (Docker, Azure CLI) abschaltet, und fragt wegen
+  „Foreign Packages", ob es trotzdem weitermachen soll: jeweils ja, Schritt 3 stellt die
+  Quellen um.
+- Fragen zu geänderten Konfigurationsdateien: die installierte Version behalten
+  (Standard `N`), dieselbe Antwort wie `--force-confold` in `52dpv-unattended-upgrades`.
+- „Remove obsolete packages?": Die Docker-Pakete und `azure-cli` sollten nicht in der
+  Liste stehen (Kompatibilität, „Fremdquellen"). Steht dort doch `docker-ce`,
+  `docker-ce-cli`, `containerd.io`, `docker-buildx-plugin`, `docker-compose-plugin` oder
+  `azure-cli`, mit **Nein** antworten, sonst kommt der Stack nach dem Neustart nicht
+  hoch.
+- Am Ende „Restart required": **Nein**. Neu gestartet wird erst in Schritt 3.
+
+Bis zur Frage „Do you want to start the upgrade?" ändert es nichts; ein Abbruch davor
+kostet nichts. Bricht es danach ab: nicht neu starten, Rollback A (Risiko 4).
+
+**3 — Quellen, Docker, Neustart.** Erst den Stack stoppen. Das Docker-Update startet den
+Daemon und damit alle Container neu; gestoppt startet der Stack nur einmal, nach dem
+Neustart:
+
+```
+cd /opt/dpv/compose
+sudo docker compose stop $(sudo docker compose config --services | grep -vx postgres)
+sudo docker compose stop -t 120 postgres
+sudo rm -f /etc/apt/sources.list.d/docker.list.disabled /etc/apt/sources.list.d/azure-cli.list.disabled
+echo "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.asc] https://download.docker.com/linux/ubuntu $(. /etc/os-release && echo "$VERSION_CODENAME") stable" \
+  | sudo tee /etc/apt/sources.list.d/docker.list
+curl -sL https://aka.ms/InstallAzureCLIDeb | sudo bash
+sudo apt-get update
+sudo apt-get install -y docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin
+grep -l noble /etc/apt/sources.list.d/*.list /etc/apt/sources.list.d/*.sources 2>/dev/null
+sudo reboot
+```
+
+Die Docker-Zeile ist dieselbe wie in cloud-init, jetzt mit `resolute`; die abgeschaltete
+Kopie, die das Upgrade hinterlässt, ist damit überflüssig. `InstallAzureCLIDeb` schreibt
+`azure-cli.sources` mit dem neuen Codenamen neu und aktualisiert `azure-cli`.
+`apt-get update` muss ohne Fehler durchlaufen, und `grep` darf nichts mehr ausgeben.
+Nach dem Neustart startet `dpv-compose.service` den Stack.
+
+**4 — Nach dem Neustart.**
+
+```
+. /etc/os-release; echo "$VERSION_ID $VERSION_CODENAME"   # 26.04 resolute
+cat /proc/version_signature                               # … -azure, ohne "~24.04"
+for m in /data/postgres /data/apps /data/nextcloud; do mountpoint "$m"; done
+swapon --show                                             # /dev/zram0
+systemctl --failed
+apt-cache policy docker-ce azure-cli | grep -E "^[a-z]|Installed"
+grep -h URIs /etc/apt/sources.list.d/ubuntu.sources
+update-alternatives --display sudo | head -2
+cd /opt/dpv/compose && sudo docker compose ps
+```
+
+Steht `~24.04` in der Kernel-Signatur, läuft noch ein Kernel aus 24.04, und den deckt
+Livepatch auf ARM64 nicht ab. Dann die Pakete aus `dpkg -l 'linux-image-*' | grep
+'~24.04'` entfernen und neu starten. Der Ubuntu-Spiegel steht danach womöglich auf
+`archive.ubuntu.com` statt auf Azures `azure.ports.ubuntu.com`: Der Upgrader schreibt
+ARM64-Quellen auf `ports.ubuntu.com` um (LP #2147101). Das funktioniert, solange
+`apt-get update` in Schritt 3 ohne Fehler lief. `update-alternatives` zeigt, ob `sudo`
+jetzt sudo-rs ist (Kompatibilität, „Sonst in 26.04").
+
+**5 — Postgres und Dienste.**
+
+```
+sudo docker compose logs --since 15m postgres | grep -iE "error|fatal|panic"
+```
+
+Keine Fehler. Keycloak und Wiki wie beim ARM64-Umzug, Schritt 7 (IPv4 und IPv6,
+Zertifikate, Login, Seite mit Anhang, Suche, Confluence-Log). Nextcloud und Collabora
+nach Phase 3, „Verifikation", in kurz: SSO-Login von einem Gerät ohne Session, eine
+Datei hoch- und herunterladen, ein Dokument in Collabora öffnen und speichern,
+`curl -4`/`-6 https://cloud.dpvonline.de/status.php`, Nextcloud-Log ohne `level ≥ 3`.
+
+**6 — Livepatch.**
+
+```
+sudo pro enable livepatch
+pro status                                     # livepatch: enabled
+sudo canonical-livepatch status --verbose      # Kernel supported, Patches applied/nothing-to-apply
+pro api u.pro.security.status.reboot_required.v1 | jq .data.attributes
+```
+
+Auf 24.04 war Livepatch `n/a` und ist deshalb nie eingeschaltet worden; das Upgrade holt
+das nicht nach (Kompatibilität). Ohne Livepatch läuft alles weiter, nur mit wöchentlichen
+Neustarts.
+
+**7 — Freigeben und Nacharbeiten.** Wartungsende ankündigen. Danach, ohne Zeitdruck:
+
+- Monitoring: nach ~15 Minuten kommen in `log-dpv-core` wieder Zeilen an,
+  `Perf | where TimeGenerated > ago(30m) | summarize by Computer, InstanceName`.
+- Timer und OS-Updates: `systemctl list-timers 'dpv-*' apt-daily-upgrade.timer`, und
+  `sudo unattended-upgrade --dry-run --debug 2>&1 | grep -A6 'Allowed origins'` zeigt
+  `resolute`.
+- Am nächsten Morgen: Der Azure-Backup-Job der Nacht ist durchgelaufen
+  (`az backup job list -g rg-dpv-core -v rsv-dpv-core --query "[0].{op:operation, status:status, start:startTime}" -o table`),
+  ebenso pgBackRest (`/var/log/pgbackrest-full.log`).
+- Im Repo: in `terraform/vm.tf` das Offer auf `ubuntu-26_04-lts` setzen, dann
+  `terraform plan`: **No changes**. Will der Plan die VM ersetzen, nicht anwenden — dann
+  greift `ignore_changes` nicht wie gedacht. README („Ubuntu 24.04 LTS" unter
+  Architektur) und hier einen „Stand"-Absatz nachtragen.
+- Nach dem nächsten Sonntags-Update den Snapshot löschen:
+  `az snapshot delete -g rg-dpv-core -n snap-dpv-os-pre-2604`.
+
+### Rollback
+
+**A — Systemplatte aus dem Snapshot, bis zum nächsten Sonntags-Update.** Wenn das
+Upgrade abbricht, die VM nach dem Neustart nicht hochkommt oder etwas auf 26.04 nicht
+läuft. Ist die VM noch erreichbar, erst den Stack wie in Schritt 3 stoppen (die beiden
+`docker compose stop`). Dann lokal:
+
+```
+RG=rg-dpv-core
+az vm stop -g $RG -n vm-dpv-core
+az disk create -g $RG -n disk-dpv-os-pre-2604 --source snap-dpv-os-pre-2604 --zone 1 \
+  --sku StandardSSD_LRS --hyper-v-generation V2 --architecture Arm64 -o table
+az vm update -g $RG -n vm-dpv-core --os-disk disk-dpv-os-pre-2604 -o table
+az vm start -g $RG -n vm-dpv-core
+```
+
+`az vm stop` hält die VM an, ohne ihre Hardware freizugeben; laut
+[Microsoft Learn](https://learn.microsoft.com/en-us/azure/virtual-machines/linux/os-disk-swap)
+reicht das. Lehnt `az vm update` den Tausch trotzdem ab, `az vm deallocate` und noch
+einmal. Zone, Plattentyp, Generation und Architektur müssen zur alten Platte passen,
+`az disk create` nimmt sonst Premium SSD ohne Zone.
+
+Die VM startet mit der Systemplatte von Schritt 1 und den aktuellen Datenplatten. Docker
+und `dpv-compose.service` bringen den Stack hoch, dann Schritte 4 und 5 mit 24.04 statt
+26.04. `terraform plan` zeigt danach **No changes**: Den Namen der Systemplatte gibt
+`vm.tf` nicht vor. Die abgelöste 26.04-Platte bleibt liegen, bis klar ist, was
+schiefging; dann löschen, sonst kostet sie weiter
+(`az disk list -g $RG --query "[?diskState=='Unattached'].name" -o tsv`).
+
+Nur bis zum nächsten Sonntags-Update: Bis dahin passen die Images auf dem Snapshot zu
+den Daten. Danach hat `dpv-update.sh` womöglich Keycloak, Confluence oder Nextcloud
+aktualisiert und deren Datenbank schon migriert, und die älteren Images auf dem Snapshot
+starten gegen ein Schema, das sie nicht kennen. Ab dann Rollback B.
+
+Meldet `az vm start` `AllocationFailed` oder `ZonalAllocationFailed`, gibt es in Zone 1
+gerade keine `D4ps_v6` (Risiko 6). Dann vorübergehend eine andere ARM64-Größe,
+`az vm resize -g $RG -n vm-dpv-core --size Standard_B4ps_v2` (Kontingent siehe
+Vorbereitung), dieselbe Größe als `VM_SIZE` in `terraform.tfvars`, und später zurück.
+
+**B — Neuaufbau.** Nach dem Sonntags-Update, oder wenn A nicht geht. Terraform baut die
+VM mit dem Offer aus `terraform/vm.tf` neu: `ubuntu-24_04-lts` zurück, oder
+`ubuntu-26_04-lts` als Flucht nach vorn, wenn 26.04 selbst läuft, das Upgrade die VM
+aber verbogen hat. Ablauf wie beim „Umzug auf ARM64", Schritte 2 und 4–8, mit drei
+Unterschieden:
+
+- Vor dem Neuaufbau `sudo pro detach --assume-yes`, sonst belegt die alte VM weiter einen
+  Platz im Pro-Abo (fünf im kostenlosen Abo).
+- `terraform apply -replace=azurerm_linux_virtual_machine.app`, denn ein geändertes
+  Offer allein baut nichts neu. Der Plan ersetzt die VM, ihre drei Plattenanbindungen, den
+  Monitoring-Agenten mit DCR-Zuordnung und die zwei Rollenzuweisungen. **Nicht** im Plan
+  dürfen stehen: `azurerm_managed_disk.*`, `azurerm_backup_protected_vm.app`,
+  irgendetwas aus Key Vault.
+- Verloren geht alles auf der Systemplatte (Tabelle oben). Was seit dem Upgrade von Hand
+  auf der VM dazukam, vorher ins Repo übernehmen: Host-Dateien in
+  `scripts/apply-host-config.sh`, das cloud-init beim Neuaufbau aufruft.
+
+### Huge Pages für Postgres (unabhängig vom Upgrade)
+
+Gegenmittel zu Risiko 1, auf 24.04 genauso wie auf 26.04, denn beide laufen auf Linux 7.0.
+Ob es nötig ist: Wartende auf einen umkämpften Spinlock zeigt Postgres als Wartezustand
+`SpinDelay`. Unter Last, etwa werktags am Vormittag, eine Minute lang zählen:
+
+```
+cd /opt/dpv/compose
+P="sudo docker compose exec -T --user postgres postgres"
+for i in $(seq 60); do
+  $P psql -Atc "select count(*) from pg_stat_activity where wait_event = 'SpinDelay'"
+  sleep 1
+done | sort -n | uniq -c
+```
+
+Fast nur Nullen heißt, dass es nicht durchschlägt. Tauchen regelmäßig Werte über null
+auf, die nötige Zahl Huge Pages abfragen und mit etwas Luft reservieren:
+
+```
+$P psql -Atc "show shared_memory_size_in_huge_pages"     # z. B. 80
+echo "vm.nr_hugepages = 100" | sudo tee /etc/sysctl.d/60-dpv-postgres-hugepages.conf
+sudo sysctl --system && grep HugePages_Total /proc/meminfo
+```
+
+Dann im Repo `"-c", "huge_pages=on"` in `compose/docker-compose.postgres.yml` eintragen
+(`on` statt `try`, damit Postgres bei fehlenden Huge Pages nicht startet, statt leise
+ohne weiterzulaufen) und die sysctl-Datei ins Repo legen, eingespielt von
+`scripts/apply-host-config.sh`: eine `sync_file`-Zeile, `/etc/sysctl.d/*dpv*` in die
+Aufräumliste, als Aktivierung `sysctl --system`. Nach dem Ausrollen
+zeigt `$P psql -Atc "show huge_pages_status"` den Wert `on`. Wird `shared_buffers`
+später größer, die Zahl der Huge Pages mit anheben.
+
+### Neustarts danach
+
+`unattended-upgrades` spielt Updates jede Nacht ein, ohne selbst neu zu starten
+(`Automatic-Reboot "false"` in `scripts/apt/52dpv-unattended-upgrades`). Den Neustart,
+den ein Update verlangt, übernimmt `dpv-reboot-if-required.timer` am Sonntag um
+04:10 UTC (README, „Automatische OS-Updates"). Vorher fragt die zweite `ExecCondition`
+der Unit `scripts/reboot-due.sh`, und das Skript fragt Ubuntu Pro
+(`pro api u.pro.security.status.reboot_required.v1`):
+
+- `yes-kernel-livepatches-applied`: Es warten nur Kernelpakete, und Livepatch hat den
+  laufenden Kernel schon gepatcht und deckt ihn ab. Dann startet die VM nur am **ersten
+  Sonntag im Monat** neu.
+- Alles andere startet an diesem Sonntag neu, wie bisher. Das ist `yes`, wenn ein
+  anderes Paket den Neustart verlangt oder Livepatch den Kernel nicht abdeckt (24.04 auf
+  ARM64, Pro nicht angemeldet, Kernel aus dem Patch-Fenster heraus, Risiko 2). Dasselbe
+  gilt, wenn Pro gar nicht antwortet.
+
+Nur auf `yes-kernel-livepatches-applied` ist Verlass. Laut Quellcode des Pro-Clients
+kommt es nur, wenn ausschließlich `linux-image*`/`linux-base` in
+`/run/reboot-required.pkgs` stehen, Livepatch genau den laufenden Kernel kennt, dessen
+Status `applied` oder `nothing-to-apply` ist und er als `supported` gilt. Das Feld
+`livepatch_enabled_and_kernel_patched` ist dagegen lockerer berechnet und taugt nicht als
+Bedingung.
+
+Monatlich statt gar nicht, weil Livepatch nur hohe und kritische Lücken abdeckt und der
+laufende Kernel im Patch-Fenster bleiben muss. Fällt der erste Sonntag aus, weil das
+Container-Update noch lief, wartet der Neustart bis zum nächsten Monat; das Fenster von
+13 Monaten verträgt das. Auf 24.04 ändert die Regel nichts, weil Livepatch dort `n/a` ist
+und die Antwort damit immer `yes`. Sie kann deshalb schon vor dem Upgrade auf die VM
+und muss es auch (Vorbereitung): `apply-host-config.sh` spielt sie mit dem
+Sonntags-Update ein, ein Neuaufbau per cloud-init.
+
+Kontrolle nach dem Upgrade:
+
+```
+sudo /opt/dpv/scripts/reboot-due.sh; echo $?                   # 1, wenn nur Kernel wartet (ab dem 8. des Monats)
+journalctl -u dpv-reboot-if-required.service | tail             # "reboot waits for the first Sunday" bzw. "Rebooting"
+```
 
 ---
 
@@ -951,13 +1635,12 @@ Kein Zeitdruck, alles nach dem letzten Cutover.
 - **Nextcloud weiter hochziehen**, 33 → 34 → 35, ein Major pro Schritt; vorher prüfen,
   ob alle Apps die neue Version unterstützen (Stand 24.09.: ja, für beide). Auf der VM
   ist das ein Renovate-PR plus Pre-Update-Backup, statt Handarbeit auf Lightsail.
-- **Auf `user_oidc` umstellen**, falls die Probe in Phase 3 gut ausgeht.
+- *Erledigt am 28.10.:* auf `user_oidc` umgestellt (Phase 4).
 - **`notify_push`** (Client-Push): entlastet den Server bei vielen Desktop-Clients,
   die sonst regelmäßig nach Änderungen fragen. Optional das Talk-Hochleistungs-Backend.
-- **`terraform/dns.tf` aufräumen** — die Records `auth`, `wiki`, `cloud` und `office`
-  in `scout-tools.de` werden nicht mehr gebraucht. Damit fällt die letzte Abhängigkeit zum alten Repo weg und
-  `azure-docker` steht vollständig auf eigenen Füßen.
-- **Altes Repo aufräumen** — migrierte Ressourcen aus `azure-infrastructure` entfernen.
+- *Erledigt mit dem AKS-Abriss:* `terraform/dns.tf` ist aufgeräumt, die Zone
+  `scout-tools.de` gehört diesem Repo, und `azure-infrastructure` hat keine Ressourcen
+  mehr.
 - **Optional:** `imaginary` als eigener Container für Bildvorschauen; Nextcloud Primary
   Object Storage auf Blob mit Lifecycle-Tiering, falls die Daten je in den TB-Bereich
   wachsen (bei 150 GB spart das ~15 €/Monat und kostet einen nicht unterstützten
@@ -967,13 +1650,9 @@ Kein Zeitdruck, alles nach dem letzten Cutover.
 
 ## Offene Fragen
 
-Die Fragen aus der Planung sind beantwortet (Versionen, Größen, SMB: siehe Phase 1 und
-Phase 3). Offen bleibt:
-
-| Frage | Gebraucht für | Wie herausfinden |
-|---|---|---|
-| Ersetzt `user_oidc` das bisherige `oidc_login`? | Phase 4 oder 5 | Probe in Phase 3 |
-| Warum landet der Desktop-Client nach dem Keycloak-Login auf der Passwortmaske? | Phase 3 | URL der Seite beim Auftreten notieren |
+Keine. Die Fragen aus der Planung sind beantwortet (Versionen, Größen, SMB: siehe
+Phase 1 und Phase 3). `user_oidc` hat `oidc_login` ersetzt, und damit ist auch die
+Passwortmaske im Desktop-Client verschwunden (Phase 4).
 
 ## Kostenüberblick
 
@@ -998,6 +1677,6 @@ jedes GB ~0,075 €. Eine VM-Reservierung lohnt sich nicht, solange die Credits 
 Credits können keine Reservierung bezahlen, die Reservierung ginge also samt
 Mehrwertsteuer auf die Karte.
 
-Bis zum Abriss kommt der AKS mit ~155 €/Monat dazu (Knoten, IP, Prometheus in `Infra`
-und der `MC_`-Gruppe). Nach dem Abriss bleiben dort die DNS-Zone `scout-tools.de`
-(~0,45 €) und eine Container Registry (~4,50 €), die mit Biber überflüssig ist.
+Bis zum Abriss am 28.10. kam der AKS mit ~155 €/Monat dazu (Knoten, IP, Prometheus in
+`Infra` und der `MC_`-Gruppe). Übrig bleibt davon nur die DNS-Zone `scout-tools.de`
+(~0,45 €), jetzt in `rg-dpv-core`; die Container Registry (~4,50 €) ging mit `Infra`.

@@ -1,9 +1,10 @@
 [Unit]
-Description=Delete never-verified Keycloak registrations (older than 48h)
+Description=Find never-verified Keycloak registrations (dry run until --delete is added below)
 After=docker.service dpv-compose.service
 Requires=docker.service
 
 [Service]
 Type=oneshot
-ExecStart=/opt/dpv/scripts/keycloak-prune-unverified.sh --delete
+# Dry run: only logs the count. Append --delete after checking the count (see README).
+ExecStart=/opt/dpv/scripts/keycloak-prune-unverified.sh
 TimeoutStartSec=1800
