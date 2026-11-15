@@ -259,15 +259,14 @@ committen.
    **Änderungen an `cloud-init.yaml.tftpl` bauen die VM nicht neu.** cloud-init läuft
    nur beim ersten Boot, und die VM ignoriert Änderungen an `custom_data`
    (`lifecycle { ignore_changes = [custom_data] }` in `terraform/vm.tf`). Neues, das
-   über cloud-init installiert wird — etwa ein zusätzlicher systemd-Timer —, kommt
-   deshalb **zweimal** rein: auf der laufenden VM von Hand, und in cloud-init, damit
-   der nächste Neuaufbau es mitbringt. Beispiel für einen neuen Timer aus
-   `scripts/systemd/`:
-   ```
-   sudo git -C /opt/dpv/repo pull
-   sudo cp /opt/dpv/scripts/systemd/<name>.{service,timer} /etc/systemd/system/
-   sudo systemctl daemon-reload && sudo systemctl enable --now <name>.timer
-   ```
+   über cloud-init installiert wird, kommt deshalb **nicht** mehr von Hand auf die
+   VM: Host-Dateien (systemd-Units, apt-, journald-, zram-Config) stehen in
+   `scripts/apply-host-config.sh`, das cloud-init beim Neuaufbau und
+   `update-containers.sh` bei jedem Lauf nach dem `git pull` aufruft (siehe „Rollout
+   auf der VM"). Eine neue Datei braucht dort nur eine Zeile Quelle → Ziel und ggf.
+   ihren Aktivierungsschritt. Was `cloud-init.yaml.tftpl` selbst erzeugt (etwa
+   `dpv-compose.service`, `boot.sh`, Terraform-Werte), greift dagegen nur bei einem
+   Neuaufbau.
    Soll eine cloud-init-Änderung wirklich greifen, die VM bewusst neu bauen:
    `terraform apply -replace=azurerm_linux_virtual_machine.app`. Die Daten überleben
    das, alle drei Datenplatten sind eigene Ressourcen, und der Azure-Backup-Eintrag
@@ -535,14 +534,21 @@ war). Ablauf:
 2. **Vor** jeder Änderung: zusätzliches `pgbackrest`-Full-Backup als Sicherheitsnetz —
    schlägt das fehl, bricht der Lauf sofort ab, ohne irgendetwas anzufassen.
 3. `git pull` (holt gemergte Renovate-PRs + sonstige `main`-Änderungen).
-4. `docker compose pull && docker compose up -d --build`.
-5. Health-Check-Schleife (bis zu 5 Minuten): alle Services `running`, Keycloak-Health
+4. `scripts/apply-host-config.sh`: bringt die Host-Dateien aus dem Repo (systemd-Units
+   und -Drop-ins, apt-, journald-, zram-Config) nach `/etc` und aktiviert nur, was sich
+   geändert hat. Läuft bei **jedem** Lauf, auch wenn der Pull nichts Neues brachte.
+   Fehler dort werden ins Log geschrieben (`WARNING`), das Container-Update läuft
+   trotzdem weiter. Docker startet dafür nie neu (ein geändertes Drop-in gilt ab dem
+   nächsten Boot). Ein Rollback (Schritt 8) macht eingespielte Host-Dateien nicht
+   rückgängig. Aus `/etc` verschwindet nichts, was im Repo gelöscht wird.
+5. `docker compose pull && docker compose up -d --build`.
+6. Health-Check-Schleife (bis zu 5 Minuten): alle Services `running`, Keycloak-Health
    (`/health/ready`), Postgres (`pg_isready`).
-6. Bei Erfolg: Images und Build-Cache, die kein Container mehr nutzt, löschen
+7. Bei Erfolg: Images und Build-Cache, die kein Container mehr nutzt, löschen
    (`docker image prune -af`, `docker builder prune -f`), freien Platz und Log-Eintrag
    nach `/var/log/dpv-update.log`, fertig. Ohne das blieb jede alte Version liegen —
    bis November 2026 gut 20 GB der 46-GB-OS-Platte.
-7. Bei Fehlschlag (Pull/Build/Health-Check): `git reset --hard` auf den gemerkten
+8. Bei Fehlschlag (Pull/Build/Health-Check): `git reset --hard` auf den gemerkten
    Commit + `docker compose up -d --build` — Rollback auf den vorherigen Stand (die
    alten Images liegen noch lokal, weil erst nach einem erfolgreichen Lauf aufgeräumt
    wird; ein späteres Zurückdrehen von Hand lädt sie neu).
@@ -561,10 +567,14 @@ sudo tail -f /var/log/dpv-update.log
 ```
 
 Die systemd-Unit-Dateien (`scripts/systemd/dpv-update.{service,timer}`) sind bewusst
-**statische Dateien im Repo**, nicht in `custom_data` gerendert — künftige Änderungen an
-Schedule/Logik brauchen dadurch keinen VM-Rebuild mehr, nur diese initiale Einführung
-brauchte noch einen (weil `cloud-init.yaml.tftpl`s `runcmd` sich geändert hat, um die
-Dateien einmalig zu kopieren).
+**statische Dateien im Repo**, nicht in `custom_data` gerendert — Änderungen daran
+brauchen keinen VM-Rebuild, `apply-host-config.sh` spielt sie beim nächsten Lauf ein.
+
+**Rollout von `update-containers.sh` selbst**: Ein Lauf, der eine neue Version von
+`update-containers.sh` zieht, führt noch die alte aus (bash hält die alte Datei offen).
+Eine geänderte Logik dort — zuletzt der Aufruf von `apply-host-config.sh` — greift also
+erst ab dem folgenden Lauf. Soll sie sofort wirken, den Pull abwarten und das Skript
+einmal von Hand starten (`sudo /opt/dpv/scripts/apply-host-config.sh`).
 
 ## Automatische OS-Updates
 
@@ -604,19 +614,6 @@ sudo tail -50 /var/log/unattended-upgrades/unattended-upgrades.log
 sudo unattended-upgrade --dry-run --debug 2>&1 | grep -A6 'Allowed origins'
 ```
 
-**Einmalig auf der bestehenden VM**: cloud-init installiert die Dateien erst beim
-nächsten Neuaufbau (`custom_data` wird ignoriert, siehe `terraform/vm.tf`). Erst
-ausführen, nachdem das Sonntags-Update den Commit gezogen hat — kein eigenes `git pull`
-vorab, sonst sieht der nächste Update-Lauf keine Änderung und lässt gemergte
-Container-Bumps liegen:
-```bash
-sudo install -m 0644 /opt/dpv/scripts/apt/52dpv-unattended-upgrades /etc/apt/apt.conf.d/
-sudo install -D -m 0644 /opt/dpv/scripts/systemd/apt-daily-upgrade.timer.d/10-dpv-schedule.conf /etc/systemd/system/apt-daily-upgrade.timer.d/10-dpv-schedule.conf
-sudo cp /opt/dpv/scripts/systemd/dpv-reboot-if-required.{service,timer} /etc/systemd/system/
-sudo systemctl daemon-reload && sudo systemctl restart apt-daily-upgrade.timer
-sudo systemctl enable --now dpv-reboot-if-required.timer
-```
-
 ## Container-Logs (30 Tage)
 
 Alle Container schreiben ins systemd-Journal der VM (`x-logging` in jeder
@@ -651,14 +648,6 @@ Container neu (ihre `logging`-Konfiguration hat sich geändert), auch Postgres u
 Confluence — ein paar Minuten Ausfall um 03:30 UTC. Caddy liest dabei das neue
 Caddyfile. Die bisherigen json-Logs verschwinden mit den alten Containern.
 
-**Einmalig auf der bestehenden VM**, nachdem das Sonntags-Update den Commit gezogen hat
-(gleicher Grund wie oben). Bis dahin gelten Ubuntus Voreinstellungen: kein Zeitlimit,
-höchstens 4 GB.
-```bash
-sudo install -D -m 0644 /opt/dpv/scripts/journald/10-dpv-retention.conf /etc/systemd/journald.conf.d/10-dpv-retention.conf
-sudo systemctl restart systemd-journald
-```
-
 ## Speicher (Limits, zram)
 
 Am 11.11.2026 ging der VM der RAM aus: 151 Apache-Worker von Nextcloud neben Postgres,
@@ -689,23 +678,11 @@ sudo journalctl -t dpv-core-caddy-1 --since today -o cat | jq -r 'select(.status
 Taucht in der letzten Abfrage regelmäßig eine normale Nutzer-IP auf, ist das Limit für
 diese Seite zu knapp (`compose/Caddyfile`).
 
-**Einmalig auf der bestehenden VM** (zram; die Limits und Caddy kommen mit dem
-Update-Lauf): cloud-init installiert Paket und Konfiguration erst beim nächsten
-Neuaufbau, wie oben erst nach dem Sonntags-Update, das den Commit zieht. Nach einem
-Neustart richtet systemd das Gerät aus der Konfiguration selbst wieder ein.
-```bash
-sudo apt-get install -y systemd-zram-generator
-sudo install -D -m 0644 /opt/dpv/scripts/systemd/zram-generator.conf /etc/systemd/zram-generator.conf
-sudo systemctl daemon-reload
-sudo systemctl start dev-zram0.swap      # nicht systemd-zram-setup@zram0: das bereitet nur das Gerät vor
-swapon --show
-```
-
 ## Repo-Struktur
 
 ```
 bootstrap/    einmaliger Storage Account fürs Terraform-Remote-State (eigenes State)
 terraform/    eigentliche Infrastruktur (VM, Platten, Netzwerk, Key Vault, Backup, Monitoring)
 compose/      Docker-Compose-Definitionen + Caddyfile, laufen auf der VM
-scripts/      cloud-init-Template, Secret-Fetch-Skript, pgBackRest-Config-Template, Backup-Cron, Update-Skript + systemd-Units, apt-Config für OS-Updates, journald-Config für Container-Logs, zram-Config
+scripts/      cloud-init-Template, Secret-Fetch-Skript, pgBackRest-Config-Template, Backup-Cron, Update-Skript, apply-host-config.sh (spielt die Host-Dateien daneben ein: systemd-Units, apt-Config für OS-Updates, journald-Config für Container-Logs, zram-Config)
 ```
