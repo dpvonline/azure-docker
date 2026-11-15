@@ -70,6 +70,7 @@ NEED_RELOAD=0
 DOCKER_DROPIN_CHANGED=0
 UPDATE_TIMER_CHANGED=0
 PRUNE_TIMER_CHANGED=0
+KCPRUNE_TIMER_CHANGED=0
 REBOOT_TIMER_CHANGED=0
 APT_TIMER_DROPIN_CHANGED=0
 JOURNALD_CHANGED=0
@@ -143,6 +144,8 @@ sync_file systemd/dpv-update.service            /etc/systemd/system/dpv-update.s
 sync_file systemd/dpv-update.timer              /etc/systemd/system/dpv-update.timer              && { NEED_RELOAD=1; UPDATE_TIMER_CHANGED=1; }
 sync_file systemd/dpv-confluence-prune.service  /etc/systemd/system/dpv-confluence-prune.service  && NEED_RELOAD=1
 sync_file systemd/dpv-confluence-prune.timer    /etc/systemd/system/dpv-confluence-prune.timer    && { NEED_RELOAD=1; PRUNE_TIMER_CHANGED=1; }
+sync_file systemd/dpv-keycloak-prune.service   /etc/systemd/system/dpv-keycloak-prune.service   && NEED_RELOAD=1
+sync_file systemd/dpv-keycloak-prune.timer     /etc/systemd/system/dpv-keycloak-prune.timer     && { NEED_RELOAD=1; KCPRUNE_TIMER_CHANGED=1; }
 sync_file systemd/dpv-reboot-if-required.service /etc/systemd/system/dpv-reboot-if-required.service && NEED_RELOAD=1
 sync_file systemd/dpv-reboot-if-required.timer  /etc/systemd/system/dpv-reboot-if-required.timer  && { NEED_RELOAD=1; REBOOT_TIMER_CHANGED=1; }
 
@@ -235,6 +238,7 @@ fi
 
 activate_timer dpv-update.timer "$UPDATE_TIMER_CHANGED"
 activate_timer dpv-confluence-prune.timer "$PRUNE_TIMER_CHANGED"
+activate_timer dpv-keycloak-prune.timer "$KCPRUNE_TIMER_CHANGED"
 activate_timer dpv-reboot-if-required.timer "$REBOOT_TIMER_CHANGED"
 
 if [ "$APT_TIMER_DROPIN_CHANGED" = 1 ]; then

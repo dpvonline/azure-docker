@@ -694,6 +694,44 @@ sudo journalctl -t dpv-core-caddy-1 --since today -o cat | jq -r 'select(.status
 Taucht in der letzten Abfrage regelmäßig eine normale Nutzer-IP auf, ist das Limit für
 diese Seite zu knapp (`compose/Caddyfile`).
 
+### Aufräumen: Fake-Registrierungen in Keycloak
+
+`scripts/keycloak-prune-unverified.sh`, täglich 05:00 UTC durch `dpv-keycloak-prune.timer`
+(von `apply-host-config.sh` eingespielt), löscht im Realm `DPV` alle Nutzer, deren
+E-Mail-Adresse nach 48 Stunden noch nicht bestätigt ist (Bot-Registrierungen). Es läuft
+über die Admin-API (`kcadm`) mit dem Service-Account-Client `keycloak-prune`, nicht über die
+Datenbank; mehr Treffer als `MAX_DELETIONS` pro Lauf (3000 im Service) brechen ab.
+
+**Einrichtung (einmalig):** Das Bootstrap-Admin-Passwort aus Key Vault passt nicht zur
+migrierten Datenbank, deshalb ein eigener Client. Sein Secret erzeugt Terraform
+(`keycloak-prune-client-secret` in `terraform/keyvault.tf`):
+```bash
+cd terraform && terraform apply
+sudo /opt/dpv/scripts/fetch-secrets.sh <vault>   # auf der VM, schreibt .env neu
+az keyvault secret show --vault-name <vault> --name keycloak-prune-client-secret --query value -o tsv
+```
+Keycloaks Oberfläche kann ein Client-Secret nicht vorgeben, aber der Partial Import:
+Realm `DPV` → Realm settings → Action → Partial import, mit
+```json
+{"clients": [{"clientId": "keycloak-prune", "enabled": true, "publicClient": false,
+  "serviceAccountsEnabled": true, "standardFlowEnabled": false,
+  "directAccessGrantsEnabled": false, "secret": "<Wert von oben>"}]}
+```
+Danach Clients → `keycloak-prune` → Tab „Service account roles“ → Assign role →
+`manage-users` (Filter by clients, `realm-management`).
+
+**Der Timer läuft zunächst nur als Trockenlauf** (`dpv-keycloak-prune.service` ohne
+`--delete`, Ergebnis im Journal). Aus AKS migrierte Mitglieder mit unbestätigter E-Mail
+wären nicht von Bots zu unterscheiden. Ablauf:
+```bash
+sudo systemctl start dpv-keycloak-prune.service && journalctl -u dpv-keycloak-prune.service -n 5
+# optional nur Konten ab einem Stichtag (ms seit 1970): SINCE_EPOCH_MS=… davorsetzen
+```
+Passt die Zahl, in `scripts/systemd/dpv-keycloak-prune.service` `--delete` an den
+`ExecStart` hängen und mergen (`MAX_DELETIONS=3000` deckt die ~1000 Alt-Fälle ab); `apply-host-config.sh` aktiviert es beim nächsten Update-Lauf.
+
+Vorbeugend gehören ins Realm: reCAPTCHA im Registrierungs-Flow und „Verify email".
+
 ## Repo-Struktur
 
 ```

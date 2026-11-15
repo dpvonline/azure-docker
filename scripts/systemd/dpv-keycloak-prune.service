@@ -1,0 +1,12 @@
+[Unit]
+Description=Find never-verified Keycloak registrations (dry run until --delete is added below)
+After=docker.service dpv-compose.service
+Requires=docker.service
+
+[Service]
+Type=oneshot
+# Dry run: only logs the count. Append --delete after checking the count (see README).
+# First run clears the ~1000 bot backlog; later runs are far below the cap.
+Environment=MAX_DELETIONS=3000
+ExecStart=/opt/dpv/scripts/keycloak-prune-unverified.sh
+TimeoutStartSec=1800
