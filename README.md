@@ -718,15 +718,13 @@ Realm `DPV` → Realm settings → Action → Partial import, mit
 Danach Clients → `keycloak-prune` → Tab „Service account roles“ → Assign role →
 `manage-users` (Filter by clients, `realm-management`).
 
-**Der Timer läuft zunächst nur als Trockenlauf** (`dpv-keycloak-prune.service` ohne
-`--delete`, Ergebnis im Journal). Aus AKS migrierte Mitglieder mit unbestätigter E-Mail
-wären nicht von Bots zu unterscheiden. Ablauf:
+**Trockenlauf** (löscht nichts, zeigt nur die Zahl im Journal):
 ```bash
-sudo systemctl start dpv-keycloak-prune.service && journalctl -u dpv-keycloak-prune.service -n 5
-# optional nur Konten ab einem Stichtag (ms seit 1970): SINCE_EPOCH_MS=… davorsetzen
+sudo /opt/dpv/scripts/keycloak-prune-unverified.sh
 ```
-Passt die Zahl, in `scripts/systemd/dpv-keycloak-prune.service` `--delete` an den
-`ExecStart` hängen und mergen (`MAX_DELETIONS=3000` deckt die ~1000 Alt-Fälle ab); `apply-host-config.sh` aktiviert es beim nächsten Update-Lauf.
+Der Timer ruft das Skript mit `--delete` auf (am 15.11.2026 war der Trockenlauf bei
+1009 Treffern, alles Bots). Optional nur Konten ab einem Stichtag: `SINCE_EPOCH_MS=…`
+(ms seit 1970) per `Environment=` in `dpv-keycloak-prune.service` setzen.
 
 Vorbeugend gehören ins Realm: reCAPTCHA im Registrierungs-Flow und „Verify email".
 
