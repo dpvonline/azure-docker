@@ -1210,6 +1210,37 @@ Schneller wird die VM durch 26.04 nicht spürbar. Was ARM64 angeht, steckt das m
 Kernel, und der ist auch auf 24.04 schon 7.0 (Risiko 1); die Container bringen ihre
 eigenen Bibliotheken mit.
 
+### Stand 15.11.2026: durchgeführt
+
+- Am Abend nach dem Merge von #48, ohne auf das Sonntags-Update zu warten:
+  `dpv-update.service` von Hand (holte #48 auf die VM, `apply-host-config.sh` spielte
+  die Neustart-Unit ein), dann Schritte 1–7 mit Snapshot `snap-dpv-os-pre-2604`.
+  Ganz weg war der Stack in Schritt 3 von 19:37 bis 19:40 UTC, dazu je ein paar Minuten
+  beim Docker-Update in Schritt 1 und beim Neustart am Ende des Upgrades.
+- Ergebnis: Ubuntu 26.04, Kernel `7.0.0-1020.21-azure`; Livepatch `enabled`, Kernel
+  `supported`, `nothing-to-apply`. Docker 29.9.3 und Azure CLI aus den
+  `resolute`-Quellen, `unattended-upgrades` mit `resolute` für alle Quellen. Das Offer
+  in `terraform/vm.tf` steht seitdem auf `ubuntu-26_04-lts`.
+- Abweichungen vom Ablauf, die Schritte oben sind entsprechend ergänzt:
+  - Das `dist-upgrade` in Schritt 1 brachte ein Docker-Update. Beim Neustart des
+    Daemons wurden Caddy und Postgres neu erstellt, Confluence verlor mitten im Start die
+    Datenbank und hing, bis `docker compose restart confluence` es neu startete.
+  - Die SSH-Verbindung riss beim Entpacken ab; `screen -d -r` holte die Sitzung zurück.
+  - Gefragt hat das Upgrade nach `chrony.conf` (lokal behalten) und nach dem Ziel für
+    GRUB (`/dev/sda15`).
+  - Beim Aufräumen übersprang es Docker und Azure CLI als Fremdpakete, wie erwartet.
+    Entfernt hat es unter anderem den Kernel 7.0.0-1014, Python 3.12 und
+    `tzdata-legacy`; der Azure Monitor Agent blieb.
+  - Die VM war schon neu gestartet, als Schritt 3 begann („Restart required").
+  - Ubuntu-Quellen jetzt `archive.ubuntu.com` (vorher `ports.ubuntu.com`), `sudo` ist
+    sudo-rs. Beides funktioniert und blieb so.
+  - chrony nimmt seitdem die NTS-Server von Canonical aus der neuen
+    `/etc/chrony/conf.d/ubuntu-nts.conf` statt der Host-Uhr `PHC0`, die als Rückfall
+    erreichbar bleibt. `leapsectz right/UTC` greift nicht mehr, weil `tzdata-legacy`
+    weg ist.
+- Offen: Backups der ersten Nacht prüfen (Schritt 7), Snapshot nach dem
+  Sonntags-Update am 22.11. löschen.
+
 ### Upgrade auf der VM statt Neuaufbau
 
 Beides ginge: `do-release-upgrade` bietet 24.04 → 26.04.1 seit dem 29.09.2026 an, und
@@ -1252,7 +1283,7 @@ während des Upgrades weiter und wird erst in Schritt 3 sauber gestoppt.
 | Azure Backup | Die [Matrix](https://learn.microsoft.com/en-us/azure/backup/backup-support-matrix-iaas) verweist auf die [von Azure unterstützten Distributionen](https://learn.microsoft.com/en-us/azure/virtual-machines/linux/endorsed-distros), und dort steht Ubuntu 26.04 LTS. Enhanced Policy mit Premium SSD v2 bleibt unterstützt. |
 | cloud-init | Läuft beim Upgrade nicht, erst beim nächsten Neuaufbau (Risiko 3). Version 26.1, laut Release Notes keine Änderungen für Azure; das Template hat nichts Release-Spezifisches. |
 | Image | Nur für einen späteren Neuaufbau: `Canonical:ubuntu-26_04-lts:server-arm64` in `germanywestcentral`, Gen2, dieselben Features wie das 24.04-Image, kein Marketplace-Plan. |
-| Sonst in 26.04 | systemd 259 kennt nur noch cgroup v2 (nutzt 24.04 schon; ohne bricht das Upgrade vorher ab), OpenSSH 10.2 hat kein DSA mehr (die VM nutzt ed25519), Python 3.14. Die Coreutils kommen auch beim Upgrade aus Rust (uutils), außer `cp`, `mv` und `rm`; die Skripte nutzen nur gängige Optionen von `install`, `seq`, `chown` und `ln`. Zurück zu GNU: `sudo apt install coreutils-from-gnu coreutils-from-uutils- --allow-remove-essential`. chrony gibt es nur bei Neuinstallationen, das Upgrade behält `systemd-timesyncd`. Ob `sudo` danach sudo-rs ist, zeigt Schritt 4; zurück mit `sudo update-alternatives --set sudo /usr/bin/sudo.ws`. |
+| Sonst in 26.04 | systemd 259 kennt nur noch cgroup v2 (nutzt 24.04 schon; ohne bricht das Upgrade vorher ab), OpenSSH 10.2 hat kein DSA mehr (die VM nutzt ed25519), Python 3.14. Die Coreutils kommen auch beim Upgrade aus Rust (uutils), außer `cp`, `mv` und `rm`; die Skripte nutzen nur gängige Optionen von `install`, `seq`, `chown` und `ln`. Zurück zu GNU: `sudo apt install coreutils-from-gnu coreutils-from-uutils- --allow-remove-essential`. chrony brachte schon das Azure-Image für 24.04 mit, mit der Uhr des Hyper-V-Hosts als Zeitquelle (`refclock PHC /dev/ptp_hyperv` in der vom Image geänderten `chrony.conf`); das Upgrade fragt deshalb nach dieser Datei (Schritt 2). Ob `sudo` danach sudo-rs ist, zeigt Schritt 4; zurück mit `sudo update-alternatives --set sudo /usr/bin/sudo.ws`. |
 
 ### Offene Risiken
 
@@ -1369,7 +1400,11 @@ Updates offen sind oder ein Neustart für `linux-image-*`, `linux-base` oder `li
 aussteht
 ([Quelle](https://git.launchpad.net/ubuntu-release-upgrader/tree/do-release-upgrade?h=ubuntu/noble)).
 Zeigt `cat` eines davon, jetzt neu starten (`sudo reboot`, ein paar Minuten Ausfall) und
-danach weitermachen.
+danach weitermachen. Ist unter den Updates Docker (`docker-ce`, `containerd.io`),
+startet der Daemon neu und mit ihm über `dpv-compose.service` der ganze Stack; wurden
+Images seit dem letzten Start neu gebaut (Caddy, Postgres), erstellt `boot.sh` diese
+Container neu. Confluence verliert dabei mitten im Start die Datenbank und bleibt hängen
+(so am 15.11.): `sudo docker compose restart confluence`, vor dem Snapshot.
 
 Dann lokal den Snapshot der Systemplatte:
 
@@ -1391,27 +1426,40 @@ sudo do-release-upgrade
 ```
 
 - Es fragt, ob es über SSH weitermachen soll, und läuft dann in `screen`. Reißt die
-  Verbindung ab, neu anmelden und `sudo screen -d -r`; das Protokoll steht in
-  `/var/log/dist-upgrade/`. Den Ersatz-SSH-Port 1022, den es startet, lässt die NSG
-  nicht durch.
+  Verbindung ab (am 15.11. beim Entpacken), neu anmelden und `sudo screen -d -r`; das
+  Protokoll steht in `/var/log/dist-upgrade/`. Den Ersatz-SSH-Port 1022, den es startet,
+  lässt die NSG nicht durch. `ssh -o ServerAliveInterval=30` hält die Verbindung
+  zuverlässiger offen. **Nicht** `do-release-upgrade` noch einmal starten: Es hält die
+  VM dann schon für 26.04 und meldet nur „no development version".
 - Es meldet, dass es die Fremdquellen (Docker, Azure CLI) abschaltet, und fragt wegen
   „Foreign Packages", ob es trotzdem weitermachen soll: jeweils ja, Schritt 3 stellt die
   Quellen um.
 - Fragen zu geänderten Konfigurationsdateien: die installierte Version behalten
   (Standard `N`), dieselbe Antwort wie `--force-confold` in `52dpv-unattended-upgrades`.
+  Am 15.11. kam nur `chrony.conf`: „keep the local version", sonst fehlt die Zeile mit
+  der Host-Uhr (Kompatibilität, „Sonst in 26.04").
+- GRUB meldet, es sei auf einer Platte installiert, die es nicht mehr gibt, und fragt
+  nach dem Ziel: `/dev/sda15` (die EFI-Partition, ~100 MB) angehakt lassen und `<Ok>`.
+  Die Meldung ist bei Cloud-Images normal, gespeichert ist die Platte, auf der das Image
+  gebaut wurde.
 - „Remove obsolete packages?": Die Docker-Pakete und `azure-cli` sollten nicht in der
   Liste stehen (Kompatibilität, „Fremdquellen"). Steht dort doch `docker-ce`,
   `docker-ce-cli`, `containerd.io`, `docker-buildx-plugin`, `docker-compose-plugin` oder
   `azure-cli`, mit **Nein** antworten, sonst kommt der Stack nach dem Neustart nicht
   hoch.
-- Am Ende „Restart required": **Nein**. Neu gestartet wird erst in Schritt 3.
+- Am Ende „Restart required": **Nein**. Neu gestartet wird erst in Schritt 3. Startet
+  die VM doch schon hier neu (so am 15.11.), ist das unschädlich: Docker aus den
+  24.04-Quellen läuft auch auf 26.04, weiter mit Schritt 3.
 
 Bis zur Frage „Do you want to start the upgrade?" ändert es nichts; ein Abbruch davor
 kostet nichts. Bricht es danach ab: nicht neu starten, Rollback A (Risiko 4).
 
-**3 — Quellen, Docker, Neustart.** Erst den Stack stoppen. Das Docker-Update startet den
-Daemon und damit alle Container neu; gestoppt startet der Stack nur einmal, nach dem
-Neustart:
+**3 — Quellen, Docker, Neustart.** Erst den Stack stoppen, damit Postgres mit seinem
+eigenen Timeout sauber herunterfährt und nicht mit dem Docker-Daemon. Das Docker-Update
+startet danach den Daemon neu und mit ihm `dpv-compose.service`
+(`Requires=docker.service`), das den Stack wieder hochfährt; der Neustart am Ende
+fährt ihn wieder herunter. Das ist unschädlich, Postgres fuhr am 15.11. alle drei Male
+sauber herunter:
 
 ```
 cd /opt/dpv/compose
