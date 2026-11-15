@@ -697,7 +697,7 @@ Neustart richtet systemd das Gerät aus der Konfiguration selbst wieder ein.
 sudo apt-get install -y systemd-zram-generator
 sudo install -D -m 0644 /opt/dpv/scripts/systemd/zram-generator.conf /etc/systemd/zram-generator.conf
 sudo systemctl daemon-reload
-sudo systemctl start systemd-zram-setup@zram0.service
+sudo systemctl start dev-zram0.swap      # nicht systemd-zram-setup@zram0: das bereitet nur das Gerät vor
 swapon --show
 ```
 
