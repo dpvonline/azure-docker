@@ -105,11 +105,14 @@ resource "azurerm_linux_virtual_machine" "app" {
 
   # Offer per release, SKU per architecture: ubuntu-24_04-lts and
   # ubuntu-26_04-lts both have "server" (x86) and "server-arm64". A different
-  # SKU rebuilds the VM; a different offer does not (ignore_changes below), it
-  # only decides what the next rebuild gets — see UBUNTU_RELEASE in variables.tf.
+  # SKU rebuilds the VM. A different offer does not (ignore_changes below), it
+  # only decides what the next rebuild gets: releases are upgraded in place
+  # with do-release-upgrade. Keep the offer at the release the VM runs, so a
+  # rebuild brings back the same one — it moves to ubuntu-26_04-lts right after
+  # the upgrade in MIGRATION.md ("Ubuntu 26.04 für Livepatch").
   source_image_reference {
     publisher = "Canonical"
-    offer     = "ubuntu-${replace(var.UBUNTU_RELEASE, ".", "_")}-lts"
+    offer     = "ubuntu-24_04-lts"
     sku       = local.vm_arm64 ? "server-arm64" : "server"
     version   = "latest"
   }

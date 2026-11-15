@@ -1231,8 +1231,8 @@ Den Ausschlag geben die ersten drei Zeilen. Die VM läuft stabil, und das Upgrad
 alles auf ihr stehen. Der Snapshot gibt ihm einen Rückweg, der kürzer ist als ein
 Neuaufbau. Der Preis ist Risiko 3: Ob cloud-init auf 26.04 durchläuft, zeigt erst der
 nächste Neuaufbau. Damit ein Neuaufbau trotzdem jederzeit das richtige Release bekommt,
-legt `UBUNTU_RELEASE` in `terraform/variables.tf` fest, mit welchem Image er startet; an
-der laufenden VM ändert die Variable nichts.
+legt das Offer in `terraform/vm.tf` fest, mit welchem Image er startet; an der laufenden
+VM ändert es nichts.
 
 Für Postgres ändert sich praktisch nichts. Datenverzeichnis, Container und Image
 `postgres:18` bleiben, und der Kernel ist schon heute 7.0 (Risiko 1). Postgres läuft
@@ -1490,7 +1490,7 @@ Neustarts.
 - Am nächsten Morgen: Der Azure-Backup-Job der Nacht ist durchgelaufen
   (`az backup job list -g rg-dpv-core -v rsv-dpv-core --query "[0].{op:operation, status:status, start:startTime}" -o table`),
   ebenso pgBackRest (`/var/log/pgbackrest-full.log`).
-- Im Repo: Default von `UBUNTU_RELEASE` in `terraform/variables.tf` auf `"26.04"`, dann
+- Im Repo: in `terraform/vm.tf` das Offer auf `ubuntu-26_04-lts` setzen, dann
   `terraform plan`: **No changes**. Will der Plan die VM ersetzen, nicht anwenden — dann
   greift `ignore_changes` nicht wie gedacht. README („Ubuntu 24.04 LTS" unter
   Architektur) und hier einen „Stand"-Absatz nachtragen.
@@ -1537,14 +1537,15 @@ gerade keine `D4ps_v6` (Risiko 6). Dann vorübergehend eine andere ARM64-Größe
 Vorbereitung), dieselbe Größe als `VM_SIZE` in `terraform.tfvars`, und später zurück.
 
 **B — Neuaufbau.** Nach dem Sonntags-Update, oder wenn A nicht geht. Terraform baut die
-VM mit dem Release aus `UBUNTU_RELEASE` neu: `"24.04"` zurück, oder `"26.04"` als Flucht
-nach vorn, wenn 26.04 selbst läuft, das Upgrade die VM aber verbogen hat. Ablauf wie beim
-„Umzug auf ARM64", Schritte 2 und 4–8, mit drei Unterschieden:
+VM mit dem Offer aus `terraform/vm.tf` neu: `ubuntu-24_04-lts` zurück, oder
+`ubuntu-26_04-lts` als Flucht nach vorn, wenn 26.04 selbst läuft, das Upgrade die VM
+aber verbogen hat. Ablauf wie beim „Umzug auf ARM64", Schritte 2 und 4–8, mit drei
+Unterschieden:
 
 - Vor dem Neuaufbau `sudo pro detach --assume-yes`, sonst belegt die alte VM weiter einen
   Platz im Pro-Abo (fünf im kostenlosen Abo).
-- `terraform apply -replace=azurerm_linux_virtual_machine.app`, denn `UBUNTU_RELEASE`
-  allein baut nichts neu. Der Plan ersetzt die VM, ihre drei Plattenanbindungen, den
+- `terraform apply -replace=azurerm_linux_virtual_machine.app`, denn ein geändertes
+  Offer allein baut nichts neu. Der Plan ersetzt die VM, ihre drei Plattenanbindungen, den
   Monitoring-Agenten mit DCR-Zuordnung und die zwei Rollenzuweisungen. **Nicht** im Plan
   dürfen stehen: `azurerm_managed_disk.*`, `azurerm_backup_protected_vm.app`,
   irgendetwas aus Key Vault.

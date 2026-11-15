@@ -38,9 +38,10 @@ Rollback), OS-Updates laufen nächtlich per `unattended-upgrades` — siehe unte
   `VM_SIZE` ab). Die Datenplatten überleben das; der Ablauf steht in
   [MIGRATION.md](MIGRATION.md) unter „Umzug auf ARM64". Innerhalb derselben
   Architektur ist ein Größenwechsel ein Resize mit Neustart. Ein neues Ubuntu-Release
-  kommt dagegen per `do-release-upgrade` auf die laufende VM; `UBUNTU_RELEASE` legt nur
-  fest, mit welchem Release ein Neuaufbau startet. Der Umstieg auf 26.04, mit dem
-  Livepatch auf ARM64 erst verfügbar wird, steht dort unter „Ubuntu 26.04 für Livepatch".
+  kommt dagegen per `do-release-upgrade` auf die laufende VM; das Image-Offer in
+  `terraform/vm.tf` legt nur fest, mit welchem Release ein Neuaufbau startet. Der
+  Umstieg auf 26.04, mit dem Livepatch auf ARM64 erst verfügbar wird, steht dort unter
+  „Ubuntu 26.04 für Livepatch".
 - **Drei Datenplatten**, alle unter `/data` (nicht unter `/mnt` — dort hängt der Azure-
   Agent auf Größen mit Temp-Disk den *flüchtigen* Datenträger ein, was ein bekannter
   Weg ist, persistente Daten zu verlieren; `D4ps_v6` hat gar keine Temp-Disk):

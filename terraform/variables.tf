@@ -45,24 +45,6 @@ variable "VM_SIZE" {
   default = "Standard_D4ps_v6"
 }
 
-# Ubuntu LTS release the VM image has the next time the VM is built: on a
-# deliberate rebuild (`terraform apply -replace=azurerm_linux_virtual_machine.app`)
-# or a switch of architecture. Changing it does NOTHING to the running VM — the
-# offer is in ignore_changes (vm.tf), because releases are upgraded in place
-# with do-release-upgrade. Keep it at the release the VM actually runs, so a
-# rebuild brings back the same one: it moves to "26.04" right after the upgrade
-# in MIGRATION.md ("Ubuntu 26.04 für Livepatch"). 26.04 is the first release
-# with Livepatch on ARM64 (24.04 shows it as n/a there).
-variable "UBUNTU_RELEASE" {
-  type    = string
-  default = "24.04"
-
-  validation {
-    condition     = contains(["24.04", "26.04"], var.UBUNTU_RELEASE)
-    error_message = "UBUNTU_RELEASE must be an LTS release with an image for both architectures: 24.04 or 26.04."
-  }
-}
-
 variable "POSTGRES_DISK_SIZE_GB" {
   type    = number
   default = 32
