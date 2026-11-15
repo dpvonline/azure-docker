@@ -19,6 +19,10 @@ get_secret() {
   az keyvault secret show --vault-name "${VAULT_NAME}" --name "$1" --query value -o tsv
 }
 
+# Optional: only exists once the keycloak-prune client has been set up in realm
+# DPV (README, "Aufräumen: Fake-Registrierungen in Keycloak"). Empty otherwise.
+KEYCLOAK_PRUNE_CLIENT_SECRET="$(get_secret keycloak-prune-client-secret 2>/dev/null || true)"
+
 DOMAIN_AUTH="$(get_secret domain-auth)"
 DOMAIN_WIKI="$(get_secret domain-wiki)"
 DOMAIN_CLOUD="$(get_secret domain-cloud)"
@@ -62,6 +66,7 @@ LETSENCRYPT_EMAIL=${LETSENCRYPT_EMAIL}
 POSTGRES_SUPERUSER_PASSWORD=${POSTGRES_SUPERUSER_PASSWORD}
 POSTGRES_KEYCLOAK_PASSWORD=${POSTGRES_KEYCLOAK_PASSWORD}
 KEYCLOAK_ADMIN_PASSWORD=${KEYCLOAK_ADMIN_PASSWORD}
+KEYCLOAK_PRUNE_CLIENT_SECRET=${KEYCLOAK_PRUNE_CLIENT_SECRET}
 POSTGRES_NEXTCLOUD_PASSWORD=${POSTGRES_NEXTCLOUD_PASSWORD}
 COLLABORA_ADMIN_PASSWORD=${COLLABORA_ADMIN_PASSWORD}
 EOF

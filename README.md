@@ -697,20 +697,28 @@ diese Seite zu knapp (`compose/Caddyfile`).
 `scripts/keycloak-prune-unverified.sh`, täglich 05:00 UTC durch `dpv-keycloak-prune.timer`
 (von `apply-host-config.sh` eingespielt), löscht im Realm `DPV` alle Nutzer, deren
 E-Mail-Adresse nach 48 Stunden noch nicht bestätigt ist (Bot-Registrierungen). Es läuft
-über die Admin-API (`kcadm`), nicht über die Datenbank; mehr als 500 Treffer pro Lauf
-brechen ab.
+über die Admin-API (`kcadm`) mit dem Service-Account-Client `keycloak-prune`, nicht über die
+Datenbank; mehr Treffer als `MAX_DELETIONS` pro Lauf (3000 im Service) brechen ab.
+
+**Einrichtung (einmalig, von Hand):** Das Bootstrap-Admin-Passwort aus Key Vault passt
+nicht zur migrierten Datenbank, deshalb eigener Client. In Realm `DPV` → Clients → Create:
+Client ID `keycloak-prune`, „Client authentication“ an, nur „Service accounts roles“
+anhaken. Tab „Service account roles“ → Assign role → `manage-users` (Filter by clients,
+`realm-management`). Secret aus dem Tab „Credentials“ nach Key Vault und auf die VM holen:
+```bash
+az keyvault secret set --vault-name <vault> --name keycloak-prune-client-secret --value '<secret>'
+sudo /opt/dpv/scripts/fetch-secrets.sh <vault>   # schreibt .env neu
+```
 
 **Der Timer läuft zunächst nur als Trockenlauf** (`dpv-keycloak-prune.service` ohne
 `--delete`, Ergebnis im Journal). Aus AKS migrierte Mitglieder mit unbestätigter E-Mail
 wären nicht von Bots zu unterscheiden. Ablauf:
 ```bash
 sudo systemctl start dpv-keycloak-prune.service && journalctl -u dpv-keycloak-prune.service -n 5
-# ggf. nur Konten ab einem Stichtag (ms seit 1970) erfassen:
-sudo SINCE_EPOCH_MS=1760000000000 /opt/dpv/scripts/keycloak-prune-unverified.sh
+# optional nur Konten ab einem Stichtag (ms seit 1970): SINCE_EPOCH_MS=… davorsetzen
 ```
 Passt die Zahl, in `scripts/systemd/dpv-keycloak-prune.service` `--delete` an den
-`ExecStart` hängen (bei Altlasten zusätzlich `Environment=SINCE_EPOCH_MS=…`) und
-mergen; `apply-host-config.sh` aktiviert es beim nächsten Update-Lauf.
+`ExecStart` hängen und mergen (`MAX_DELETIONS=3000` deckt die ~1000 Alt-Fälle ab); `apply-host-config.sh` aktiviert es beim nächsten Update-Lauf.
 
 Vorbeugend gehören ins Realm: reCAPTCHA im Registrierungs-Flow und „Verify email".
 

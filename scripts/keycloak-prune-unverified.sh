@@ -8,10 +8,8 @@
 # consistent; never touches the keycloak database directly.
 #
 # Dry run by default. Pass --delete to actually delete.
-# DANGER: accounts imported/migrated with emailVerified=false are
-# indistinguishable from bot registrations. SINCE_EPOCH_MS limits the sweep
-# to accounts created after a cutoff (default: none) — set it before the
-# first real run if the realm contains real unverified members.
+# Unverified accounts of any age are deleted. Set SINCE_EPOCH_MS to restrict
+# the sweep to accounts created after a cutoff (default: none).
 set -euo pipefail
 
 REALM="${REALM:-DPV}"
@@ -24,10 +22,18 @@ DELETE=false
 cd /opt/dpv/compose
 kc() { docker compose exec -T keycloak /opt/keycloak/bin/kcadm.sh "$@" </dev/null; }
 
-# Log in with the bootstrap admin from the container's own environment.
-docker compose exec -T keycloak bash -c \
+# Log in as the service account of the realm client "keycloak-prune" (role
+# manage-users in realm-management). Its secret comes from Key Vault via
+# fetch-secrets.sh -> .env. The bootstrap admin is not usable here: the
+# migrated database carries its own admin password.
+SECRET=$(grep '^KEYCLOAK_PRUNE_CLIENT_SECRET=' .env | cut -d= -f2-)
+if [ -z "$SECRET" ]; then
+  echo "KEYCLOAK_PRUNE_CLIENT_SECRET missing in .env (Key Vault secret keycloak-prune-client-secret, then rerun fetch-secrets.sh)" >&2
+  exit 1
+fi
+docker compose exec -T -e KC_SECRET="$SECRET" keycloak bash -c \
   '/opt/keycloak/bin/kcadm.sh config credentials --server http://localhost:8080 \
-     --realm master --user "$KEYCLOAK_ADMIN" --password "$KEYCLOAK_ADMIN_PASSWORD"' </dev/null >/dev/null
+     --realm '"$REALM"' --client keycloak-prune --secret "$KC_SECRET"' </dev/null >/dev/null
 
 cutoff_ms=$(( ($(date +%s) - MIN_AGE_HOURS * 3600) * 1000 ))
 
