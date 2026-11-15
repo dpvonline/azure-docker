@@ -700,15 +700,23 @@ E-Mail-Adresse nach 48 Stunden noch nicht bestätigt ist (Bot-Registrierungen). 
 über die Admin-API (`kcadm`) mit dem Service-Account-Client `keycloak-prune`, nicht über die
 Datenbank; mehr Treffer als `MAX_DELETIONS` pro Lauf (3000 im Service) brechen ab.
 
-**Einrichtung (einmalig, von Hand):** Das Bootstrap-Admin-Passwort aus Key Vault passt
-nicht zur migrierten Datenbank, deshalb eigener Client. In Realm `DPV` → Clients → Create:
-Client ID `keycloak-prune`, „Client authentication“ an, nur „Service accounts roles“
-anhaken. Tab „Service account roles“ → Assign role → `manage-users` (Filter by clients,
-`realm-management`). Secret aus dem Tab „Credentials“ nach Key Vault und auf die VM holen:
+**Einrichtung (einmalig):** Das Bootstrap-Admin-Passwort aus Key Vault passt nicht zur
+migrierten Datenbank, deshalb ein eigener Client. Sein Secret erzeugt Terraform
+(`keycloak-prune-client-secret` in `terraform/keyvault.tf`):
 ```bash
-az keyvault secret set --vault-name <vault> --name keycloak-prune-client-secret --value '<secret>'
-sudo /opt/dpv/scripts/fetch-secrets.sh <vault>   # schreibt .env neu
+cd terraform && terraform apply
+sudo /opt/dpv/scripts/fetch-secrets.sh <vault>   # auf der VM, schreibt .env neu
+az keyvault secret show --vault-name <vault> --name keycloak-prune-client-secret --query value -o tsv
 ```
+Keycloaks Oberfläche kann ein Client-Secret nicht vorgeben, aber der Partial Import:
+Realm `DPV` → Realm settings → Action → Partial import, mit
+```json
+{"clients": [{"clientId": "keycloak-prune", "enabled": true, "publicClient": false,
+  "serviceAccountsEnabled": true, "standardFlowEnabled": false,
+  "directAccessGrantsEnabled": false, "secret": "<Wert von oben>"}]}
+```
+Danach Clients → `keycloak-prune` → Tab „Service account roles“ → Assign role →
+`manage-users` (Filter by clients, `realm-management`).
 
 **Der Timer läuft zunächst nur als Trockenlauf** (`dpv-keycloak-prune.service` ohne
 `--delete`, Ergebnis im Journal). Aus AKS migrierte Mitglieder mit unbestätigter E-Mail

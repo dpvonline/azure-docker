@@ -52,6 +52,14 @@ resource "random_password" "keycloak_admin" {
   special = false
 }
 
+# Secret of the Keycloak client "keycloak-prune" (scripts/keycloak-prune-
+# unverified.sh). Terraform generates it; Keycloak gets the same value through
+# a partial import (README, "Aufräumen: Fake-Registrierungen in Keycloak").
+resource "random_password" "keycloak_prune_client" {
+  length  = 32
+  special = false
+}
+
 # Created ahead of the applications themselves — init-db.sql needs them during
 # the cluster's first initialization, which happens long before Confluence and
 # Nextcloud are deployed (see MIGRATION.md).
@@ -88,6 +96,13 @@ resource "azurerm_key_vault_secret" "postgres_keycloak" {
 resource "azurerm_key_vault_secret" "keycloak_admin" {
   name         = "keycloak-admin-password"
   value        = random_password.keycloak_admin.result
+  key_vault_id = azurerm_key_vault.core.id
+  depends_on   = [azurerm_role_assignment.deployer_kv_officer]
+}
+
+resource "azurerm_key_vault_secret" "keycloak_prune_client" {
+  name         = "keycloak-prune-client-secret"
+  value        = random_password.keycloak_prune_client.result
   key_vault_id = azurerm_key_vault.core.id
   depends_on   = [azurerm_role_assignment.deployer_kv_officer]
 }
