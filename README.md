@@ -659,11 +659,53 @@ sudo install -D -m 0644 /opt/dpv/scripts/journald/10-dpv-retention.conf /etc/sys
 sudo systemctl restart systemd-journald
 ```
 
+## Speicher (Limits, zram)
+
+Am 11.11.2026 ging der VM der RAM aus: 151 Apache-Worker von Nextcloud neben Postgres,
+Confluence und Keycloak, kein Swap, keine Limits. Der OOM-Killer beendete mehrere
+Container, die Maschine war rund 20 Minuten nicht erreichbar. Seitdem:
+
+- **Nextcloud** startet höchstens 30 Apache-Worker (`compose/nextcloud-mpm.conf`, vorher
+  150). Ein Ansturm wartet in Apaches Warteschlange, statt Speicher zu fressen. Mehr
+  Worker nur zusammen mit einem höheren `mem_limit`.
+- **`mem_limit` je Container** — läuft einer davon, beendet der Kernel nur Prozesse in
+  dessen Container. Postgres und Caddy haben bewusst keins (Postgres bekommt, was übrig
+  bleibt), aber `oom_score_adj: -500`, damit der OOM-Killer sie als Letzte trifft.
+- **zram-Swap**: komprimierter Swap im RAM, halbe RAM-Größe, zstd
+  (`scripts/systemd/zram-generator.conf`). Gibt dem Kernel Luft, ohne auf die OS-Platte
+  auszulagern.
+- **Alert**, wenn weniger als 2 GB RAM verfügbar sind (`terraform/monitoring.tf`).
+- **Rate-Limit in Caddy** pro Client-IP und Minute: auth 300, wiki 600, cloud 1200,
+  office keins. Aufrufe aus dem Docker-Netz zählen nicht (Collabora ↔ Nextcloud).
+  Darüber antwortet Caddy mit 429 und `Retry-After`.
+
+Kontrolle auf der VM:
+```bash
+swapon --show                                                     # /dev/zram0, ~7,8 GB
+sudo docker stats --no-stream --format "table {{.Name}}\t{{.MemUsage}}"
+sudo journalctl -k | grep -i oom                                  # hat der OOM-Killer zugeschlagen?
+sudo journalctl -t dpv-core-caddy-1 --since today -o cat | jq -r 'select(.status == 429) | .request.client_ip' | sort | uniq -c
+```
+Taucht in der letzten Abfrage regelmäßig eine normale Nutzer-IP auf, ist das Limit für
+diese Seite zu knapp (`compose/Caddyfile`).
+
+**Einmalig auf der bestehenden VM** (zram; die Limits und Caddy kommen mit dem
+Update-Lauf): cloud-init installiert Paket und Konfiguration erst beim nächsten
+Neuaufbau, wie oben erst nach dem Sonntags-Update, das den Commit zieht. Nach einem
+Neustart richtet systemd das Gerät aus der Konfiguration selbst wieder ein.
+```bash
+sudo apt-get install -y systemd-zram-generator
+sudo install -D -m 0644 /opt/dpv/scripts/systemd/zram-generator.conf /etc/systemd/zram-generator.conf
+sudo systemctl daemon-reload
+sudo systemctl start systemd-zram-setup@zram0.service
+swapon --show
+```
+
 ## Repo-Struktur
 
 ```
 bootstrap/    einmaliger Storage Account fürs Terraform-Remote-State (eigenes State)
 terraform/    eigentliche Infrastruktur (VM, Platten, Netzwerk, Key Vault, Backup, Monitoring)
 compose/      Docker-Compose-Definitionen + Caddyfile, laufen auf der VM
-scripts/      cloud-init-Template, Secret-Fetch-Skript, pgBackRest-Config-Template, Backup-Cron, Update-Skript + systemd-Units, apt-Config für OS-Updates, journald-Config für Container-Logs
+scripts/      cloud-init-Template, Secret-Fetch-Skript, pgBackRest-Config-Template, Backup-Cron, Update-Skript + systemd-Units, apt-Config für OS-Updates, journald-Config für Container-Logs, zram-Config
 ```
