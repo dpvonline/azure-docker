@@ -3,6 +3,12 @@
 # installation — fetch-secrets.sh checks for config/config.php. Started on an
 # empty directory, the image would present the public setup wizard instead.
 
+# Logging to journald, see docker-compose.yml.
+x-logging: &logging
+  driver: journald
+  options:
+    tag: "{{.Name}}"
+
 services:
   nextcloud:
     # The plain upstream image, exactly as on Lightsail — the custom Dockerfile in
@@ -12,6 +18,7 @@ services:
     # every installed app has to support the new one first.
     image: nextcloud:33.0.10-apache
     restart: unless-stopped
+    logging: *logging
     depends_on:
       - postgres
       - redis
@@ -34,6 +41,14 @@ services:
       # User files — the path stays /var/www/html/data inside the container, so
       # `datadirectory` in config.php does not change with the move.
       - /data/nextcloud:/var/www/html/data
+      # Caps Apache's worker count, see the file for why.
+      - ./nextcloud-mpm.conf:/etc/apache2/conf-enabled/zz-dpv-mpm.conf:ro
+      # OPcache JIT off — the reason is in the file.
+      - ./nextcloud/zz-dpv-opcache-jit.ini:/usr/local/etc/php/conf.d/zz-dpv-opcache-jit.ini:ro
+    # Hard memory ceiling per container (the VM has 16 GB and no swap beyond
+    # zram). Without limits one service's runaway takes the whole VM down
+    # (OOM 2026-11-11); with them the kernel kills only the offender's cgroup.
+    mem_limit: 3g
     # Port 80 is intentionally not published — Caddy reaches it over "dpv".
 
   # Background jobs (trash and version expiry, file scans, calendar reminders,
@@ -44,6 +59,7 @@ services:
   nextcloud-cron:
     image: nextcloud:33.0.10-apache
     restart: unless-stopped
+    logging: *logging
     profiles: ["nextcloud-live"]
     depends_on:
       - nextcloud
@@ -53,28 +69,34 @@ services:
     environment:
       REDIS_HOST: redis
       PHP_MEMORY_LIMIT: 1G
+    mem_limit: 768m
     volumes:
       - /data/apps/nextcloud:/var/www/html
       - /data/nextcloud:/var/www/html/data
+      - ./nextcloud/zz-dpv-opcache-jit.ini:/usr/local/etc/php/conf.d/zz-dpv-opcache-jit.ini:ro
 
   redis:
     # Cache and file locking only — nothing in it has to survive a restart, so
     # no persistence and no volume.
     image: redis:8.10-alpine
     restart: unless-stopped
-    command: ["redis-server", "--save", "", "--appendonly", "no"]
+    logging: *logging
+    command: ["redis-server", "--save", "", "--appendonly", "no", "--maxmemory", "200mb", "--maxmemory-policy", "allkeys-lru"]
+    mem_limit: 256m
     networks:
       - dpv
 
   collabora:
     # Set up fresh — the container on Lightsail was never reachable (its DNS
     # name pointed at AKS), and Collabora keeps no data of its own.
-    image: collabora/code:26.04.5.1.1
+    image: collabora/code:26.04.6.1.1
     restart: unless-stopped
+    logging: *logging
     networks:
       - dpv
     cap_add:
       - MKNOD
+    mem_limit: 2g
     environment:
       # The only Nextcloud allowed to open documents here.
       aliasgroup1: "https://${DOMAIN_CLOUD}:443"

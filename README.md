@@ -1,8 +1,8 @@
 # azure-docker
 
 Neues Infra-Repo für den DPV-Stack: eine einzelne Azure-VM mit Docker Compose statt AKS.
-Ersetzt schrittweise `azure-infrastructure` (das alte Repo bleibt in Betrieb, bis dieses
-hier funktioniert und der DNS-Cutover erfolgt ist).
+Löst `azure-infrastructure` ab; AKS ist seit dem 28.10.2026 abgerissen, das alte Repo
+archiviert.
 
 ## Status: Kern-Phase
 
@@ -20,7 +20,7 @@ Wie diese Dienste von AKS bzw. AWS Lightsail hierher kommen, steht in
 **[MIGRATION.md](MIGRATION.md)** — Phasen, Cutover-Fenster, Rollback pro Schritt.
 
 Container-Updates sind seitdem automatisiert (Renovate + wöchentlicher Rollout mit
-Rollback) — siehe unten.
+Rollback), OS-Updates laufen nächtlich per `unattended-upgrades` — siehe unten.
 
 ## Architektur
 
@@ -81,16 +81,14 @@ Rollback) — siehe unten.
   cert-manager/nginx-ingress nötig.
 - **Terraform-State liegt remote** in einem Azure Storage Account (`bootstrap/` legt ihn
   einmalig an, da der Storage Account nicht sein eigenes Backend sein kann).
-- **DNS zum Testen**: `auth.scout-tools.de` — die Zone `scout-tools.de` gehört weiterhin dem
-  alten Repo (`azure-infrastructure`, `azure/domain.tf`), dieses Repo referenziert sie nur
-  per `data`-Quelle und verwaltet einen einzelnen neuen Record (`auth`, dort aktuell
-  auskommentiert/nicht angelegt) über `terraform/dns.tf`. **Für den echten Cutover** liegt
-  `dpvonline.de` extern (nicht Azure DNS) — der Umstieg der A/AAAA-Records auf die neue
-  VM-IP bleibt dann ein manueller Schritt, nicht Teil dieses Repos.
-- **Resource Group**: bewusst eine neue (`rg-dpv-core`), getrennt von `Infra` (dem alten
-  Repo) — nur noch der DNS-Record referenziert `Infra` per `data`-Quelle, nichts davon
-  wird hier verändert oder mitverwaltet. (Die ACR-Referenz gab es ausschließlich für das
-  Biber-Backend und ist mit diesem entfallen.)
+- **DNS**: `dpvonline.de` liegt extern bei IONOS (nicht Azure DNS); A/AAAA-Records auf
+  die VM sind dort ein manueller Schritt, nicht Teil dieses Repos. Die Zone
+  `scout-tools.de` (bis zu den Cutovers die Testnamen) gehört seit dem AKS-Abriss diesem
+  Repo und liegt in `rg-dpv-core`, derzeit ohne eigene Records. Sie steht in
+  `terraform/dns.tf` unter `prevent_destroy`: Eine neu angelegte Zone bekäme andere
+  Nameserver als die, auf die der Registrar delegiert.
+- **Resource Group**: bewusst eine neue (`rg-dpv-core`). `Infra`, die Gruppe des alten
+  Repos, ist mit dem AKS-Abriss gelöscht.
 
 ## Einmalige Umstellung auf Postgres 18 (Phase 0)
 
@@ -261,15 +259,16 @@ committen.
    **Änderungen an `cloud-init.yaml.tftpl` bauen die VM nicht neu.** cloud-init läuft
    nur beim ersten Boot, und die VM ignoriert Änderungen an `custom_data`
    (`lifecycle { ignore_changes = [custom_data] }` in `terraform/vm.tf`). Neues, das
-   über cloud-init installiert wird — etwa ein zusätzlicher systemd-Timer —, kommt
-   deshalb **zweimal** rein: auf der laufenden VM von Hand, und in cloud-init, damit
-   der nächste Neuaufbau es mitbringt. Beispiel für einen neuen Timer aus
-   `scripts/systemd/`:
-   ```
-   sudo git -C /opt/dpv/repo pull
-   sudo cp /opt/dpv/scripts/systemd/<name>.{service,timer} /etc/systemd/system/
-   sudo systemctl daemon-reload && sudo systemctl enable --now <name>.timer
-   ```
+   über cloud-init installiert wird, kommt deshalb **nicht** mehr von Hand auf die
+   VM: Host-Dateien (systemd-Units, apt-, journald-, zram-Config) stehen in
+   `scripts/apply-host-config.sh`, das cloud-init beim Neuaufbau und
+   `update-containers.sh` bei jedem Lauf nach dem `git pull` aufruft (siehe „Rollout
+   auf der VM"). Eine neue Datei braucht dort nur eine Zeile Quelle → Ziel und ggf.
+   ihren Aktivierungsschritt. **Jede Datei muss „dpv“ im Namen tragen**
+   (`dpv-*.service`, `10-dpv-*.conf`, `52dpv-*`), sonst erkennt das Aufräumen sie nicht als
+   eigene Datei. Was `cloud-init.yaml.tftpl` selbst erzeugt (etwa
+   `dpv-compose.service`, `boot.sh`, Terraform-Werte), greift dagegen nur bei einem
+   Neuaufbau.
    Soll eine cloud-init-Änderung wirklich greifen, die VM bewusst neu bauen:
    `terraform apply -replace=azurerm_linux_virtual_machine.app`. Die Daten überleben
    das, alle drei Datenplatten sind eigene Ressourcen, und der Azure-Backup-Eintrag
@@ -291,10 +290,9 @@ committen.
      Postgres-User, nicht mit einem Linux-User auf der VM zu verwechseln, den es nicht gibt;
      `docker exec`/`compose exec` läuft sonst als `root`, und pgBackRest verbindet sich lokal
      dann fälschlich als Rolle `root` statt `postgres`)
-   - DNS für `auth.scout-tools.de` ist bereits durch `terraform/dns.tf` gesetzt (zeigt auf
-     `vm_public_ip`) — sobald das propagiert ist, stellt Caddy automatisch ein
-     Let's-Encrypt-Zertifikat aus. Für den späteren Produktiv-Cutover auf eine
-     `dpvonline.de`-Subdomain bleibt das ein manueller DNS-Schritt (siehe oben).
+   - A- und AAAA-Records der Domains aus `DOMAIN_*` müssen auf `vm_public_ip` bzw.
+     `vm_public_ipv6` zeigen (bei IONOS von Hand, siehe oben) — sobald das propagiert
+     ist, stellt Caddy automatisch ein Let's-Encrypt-Zertifikat aus.
 
 4. Verifikation: `curl -I https://<DOMAIN_AUTH>` (von außen) und, da Keycloaks Port 9000
    absichtlich nicht auf den Host published ist (nur Caddy erreicht ihn intern), von der VM aus:
@@ -382,8 +380,9 @@ verifiziert.
 pgBackRest deckt Postgres ab — und sonst nichts. Die Nutzerdateien von Nextcloud, das
 Confluence-Home und die OS-Platte brauchen eine eigene Sicherung, dafür steht
 `terraform/backup.tf`: ein Recovery Services Vault mit täglichem VM-Backup um 01:00 UTC
-(vor dem 02:00-pgBackRest-Lauf und dem Sonntags-Update um 03:30), Aufbewahrung 14 Tage
-täglich / 6 Wochen / 6 Monate.
+(vor dem 02:00-pgBackRest-Lauf und dem Sonntags-Update um 03:30), Aufbewahrung 7 Tage
+— nur tägliche Punkte, keine wöchentlichen oder monatlichen. Für Postgres reicht weiter
+zurück pgBackRest mit seiner eigenen Point-in-Time-Recovery.
 
 Die Policy ist zwingend eine **Enhanced Policy** (`policy_type = "V2"`). Die
 Standard-Policy kann VMs mit Premium-SSD-v2- oder Ultra-Datenplatten überhaupt nicht
@@ -395,9 +394,10 @@ Policy, und ein Protected Item kann nicht zwischen Standard und Enhanced wandern
 müsste neu angelegt werden.
 
 Enhanced erlaubt bis zu 30 Tage Instant-Restore-Snapshots (Standard nur 5); hier sind es
-**7 Tage**. Diese Snapshots liegen neben den Platten und machen eine Rücksicherung am
-selben Tag schnell, werden aber als Snapshot-Speicher berechnet — bei ~150 GB
-Nextcloud-Daten ist das der Punkt, an dem eine längere Aufbewahrung merklich Geld kostet.
+**2 Tage**. Diese Snapshots liegen neben den Platten und machen eine Rücksicherung der
+letzten zwei Tage schnell, werden aber als Snapshot-Speicher berechnet — bei ~150 GB
+Nextcloud-Daten pro Kopie. Ältere Punkte kommen aus dem Vault und brauchen länger, was
+reicht, weil nie mehr als 7 Tage zurück gebraucht werden.
 
 Zwei Eigenschaften, die im Ernstfall zählen:
 
@@ -494,11 +494,30 @@ per PR) und **Ausrollen** auf der VM (wöchentlich, automatisch, mit Rollback).
 weil es zusätzlich **Terraform-Provider-Versionen** abdeckt (`azurerm`/`random`/`tls`)
 und eingebautes Auto-Merge direkt in der Config hat (kein separater GitHub-Actions-
 Workflow nötig — praktisch, da unser `gh`-Token ohnehin keinen `workflow`-Scope hat).
-Konfiguriert in `renovate.json`: wöchentlich sonntags, `packageRules` mit Automerge nur
-für Patch/Minor — Major-Bumps (z. B. ein Sprung von `postgres:17` auf `18`) bleiben
-immer manuell zu mergen, weil sowas bei Postgres kein simpler Image-Swap ist
-(inkompatibles Datenverzeichnis, braucht `pg_upgrade`/Dump-Restore) und bei Keycloak
-größere Migrationen mit sich bringen kann.
+Konfiguriert in `renovate.json`:
+
+- **Wann**: neue PRs nur sonntags vor 06:00 UTC, und nur für Versionen, die
+  **mindestens 7 Tage** alt sind (`minimumReleaseAge` + `internalChecksFilter: strict`).
+  Jüngere stehen bis dahin als „pending" im Dependency Dashboard (Issue im Repo).
+- **Patch/Minor**: PR, den Renovate selbst mergt (Automerge) — für alle Dienste,
+  seit Oktober 2026 auch für Confluence-Minors (vorher nur Patches). Gemergt wird bei
+  einem der nächsten Renovate-Läufe nach dem Anlegen, nicht im selben. Bis Oktober 2026
+  hat Automerge nie gegriffen: Das Repo hat keine CI, der einzige Status-Check auf einem
+  Renovate-Branch ist Renovates eigener `renovate/stability-days`, und den zählt Renovate
+  standardmäßig nicht als „grün". `internalChecksAsSuccess` behebt das, ohne die
+  7-Tage-Prüfung auszuhebeln (anders als `ignoreTests`, das jeden Check übergeht).
+- **Major**: PR, aber nie Automerge — immer von Hand prüfen und mergen. Bei Postgres ist
+  ein Major kein simpler Image-Swap (inkompatibles Datenverzeichnis, braucht
+  `pg_upgrade`/Dump-Restore), bei Keycloak und Confluence können größere Migrationen
+  dranhängen, bei Nextcloud müssen alle installierten Apps die neue Version
+  unterstützen.
+- **Ein Major pro PR** (`maxMajorIncrement: 1`): Nextcloud startet nicht, wenn ein Major
+  übersprungen wird — ein PR 33 → 35 wie im Oktober 2026 ist damit ausgeschlossen.
+  34 → 35 bietet Renovate erst an, wenn 33 → 34 auf `main` ist. Faustregel: den
+  nächsten Major-PR desselben Dienstes erst mergen, wenn der vorige auf der VM
+  ausgerollt ist (`/var/log/dpv-update.log`), sonst rollt der Sonntagslauf beide auf
+  einmal aus. Bei Nextcloud fängt das zwar das Image selbst ab (Container startet
+  nicht → Health-Check → Rollback), aber jeder weitere Update-Lauf hängt dann daran fest.
 
 **Einmalig nötig** (schon erledigt): die Renovate-GitHub-App muss über
 https://github.com/apps/renovate auf `dpvonline/azure-docker` installiert werden —
@@ -517,17 +536,30 @@ war). Ablauf:
 2. **Vor** jeder Änderung: zusätzliches `pgbackrest`-Full-Backup als Sicherheitsnetz —
    schlägt das fehl, bricht der Lauf sofort ab, ohne irgendetwas anzufassen.
 3. `git pull` (holt gemergte Renovate-PRs + sonstige `main`-Änderungen).
-4. `docker compose pull && docker compose up -d --build`.
-5. Health-Check-Schleife (bis zu 5 Minuten): alle Services `running`, Keycloak-Health
+4. `scripts/apply-host-config.sh`: bringt die Host-Dateien aus dem Repo (systemd-Units
+   und -Drop-ins, apt-, journald-, zram-Config) nach `/etc` und aktiviert nur, was sich
+   geändert hat. Läuft bei **jedem** Lauf, auch wenn der Pull nichts Neues brachte.
+   Fehler dort werden ins Log geschrieben (`WARNING`), das Container-Update läuft
+   trotzdem weiter. Docker startet dafür nie neu (ein geändertes Drop-in gilt ab dem
+   nächsten Boot). Ein Rollback (Schritt 8) macht eingespielte Host-Dateien nicht
+   rückgängig. Was im Repo gelöscht wird, entfernt es auch aus `/etc` (nur Dateien mit „dpv“ im Namen
+   in den eigenen Verzeichnissen, Timer werden vorher deaktiviert).
+5. `docker compose pull && docker compose up -d --build`.
+6. Health-Check-Schleife (bis zu 5 Minuten): alle Services `running`, Keycloak-Health
    (`/health/ready`), Postgres (`pg_isready`).
-6. Bei Erfolg: Log-Eintrag nach `/var/log/dpv-update.log`, fertig.
-7. Bei Fehlschlag (Pull/Build/Health-Check): `git reset --hard` auf den gemerkten
-   Commit + `docker compose up -d --build` — Rollback auf den vorherigen Stand (alte
-   Images liegen i. d. R. noch lokal im Cache, kein erneuter Pull nötig).
+7. Bei Erfolg: Images und Build-Cache, die kein Container mehr nutzt, löschen
+   (`docker image prune -af`, `docker builder prune -f`), freien Platz und Log-Eintrag
+   nach `/var/log/dpv-update.log`, fertig. Ohne das blieb jede alte Version liegen —
+   bis November 2026 gut 20 GB der 46-GB-OS-Platte.
+8. Bei Fehlschlag (Pull/Build/Health-Check): `git reset --hard` auf den gemerkten
+   Commit + `docker compose up -d --build` — Rollback auf den vorherigen Stand (die
+   alten Images liegen noch lokal, weil erst nach einem erfolgreichen Lauf aufgeräumt
+   wird; ein späteres Zurückdrehen von Hand lädt sie neu).
 
 **Ehrliche Grenze**: das Rollback bringt den Container-Stand zurück, aber falls eine
 DB-Migration (Keycloak führt bei *jeder* Versionsänderung welche aus, nicht nur bei
-Major-Versionen) vor dem Fehlschlag bereits teilweise gegriffen hat, ist das nicht
+Major-Versionen, Confluence bei Minor-Versionen) vor dem Fehlschlag bereits teilweise
+gegriffen hat, ist das nicht
 automatisch mit rückgängig gemacht — dafür ist das Vor-Update-Backup da (manueller
 Restore nach dem oben beschriebenen Ablauf).
 
@@ -538,10 +570,116 @@ sudo tail -f /var/log/dpv-update.log
 ```
 
 Die systemd-Unit-Dateien (`scripts/systemd/dpv-update.{service,timer}`) sind bewusst
-**statische Dateien im Repo**, nicht in `custom_data` gerendert — künftige Änderungen an
-Schedule/Logik brauchen dadurch keinen VM-Rebuild mehr, nur diese initiale Einführung
-brauchte noch einen (weil `cloud-init.yaml.tftpl`s `runcmd` sich geändert hat, um die
-Dateien einmalig zu kopieren).
+**statische Dateien im Repo**, nicht in `custom_data` gerendert — Änderungen daran
+brauchen keinen VM-Rebuild, `apply-host-config.sh` spielt sie beim nächsten Lauf ein.
+
+**Rollout von `update-containers.sh` selbst**: Ein Lauf, der eine neue Version von
+`update-containers.sh` zieht, führt noch die alte aus (bash hält die alte Datei offen).
+Eine geänderte Logik dort — zuletzt der Aufruf von `apply-host-config.sh` — greift also
+erst ab dem folgenden Lauf. Soll sie sofort wirken, den Pull abwarten und das Skript
+einmal von Hand starten (`sudo /opt/dpv/scripts/apply-host-config.sh`).
+
+## Automatische OS-Updates
+
+`unattended-upgrades` spielt jede Nacht alles ein, was die Paketquellen der VM hergeben —
+nicht nur Sicherheitsupdates (Ubuntus Voreinstellung), sondern auch die regulären
+Ubuntu-Updates (`noble-updates`), Docker Engine + Compose-Plugin und die Azure CLI.
+Konfiguriert in `scripts/apt/52dpv-unattended-upgrades` (ergänzt Ubuntus
+`50unattended-upgrades`, ersetzt sie nicht),
+`scripts/systemd/apt-daily-upgrade.timer.d/10-dpv-schedule.conf` und
+`scripts/systemd/dpv-reboot-if-required.{service,timer}`.
+
+- **Wann**: täglich 00:30 UTC statt Ubuntus 06:00 plus bis zu einer Stunde Zufall — vor
+  Azure Backup (01:00), pgBackRest (02:00), Sonntags-Update (03:30) und
+  Confluence-Prune (04:30).
+- **Neustart**: höchstens einmal pro Woche, **sonntags 04:10 UTC** nach dem
+  Container-Update, und nur wenn ein Update ihn verlangt (`/run/reboot-required`, vor
+  allem Kernel). Ubuntu Pro hilft hier nicht: Livepatch gibt es auf ARM64 erst ab Ubuntu
+  26.04, die VM läuft auf 24.04 — Pro liefert ihr nur ESM. Der Preis des
+  Wochenrhythmus: ein Kernel-Fix liegt bis zu einer Woche installiert, aber inaktiv
+  herum. Läuft um 04:10 noch ein Update-Lauf, fällt der Neustart für diese Woche aus.
+  Der Stack kommt danach von selbst wieder hoch: Docker wartet auf die Datenplatten,
+  `dpv-compose.service` startet `boot.sh`.
+- **Docker-Updates** starten den Daemon neu und damit alle Container — ein paar Minuten
+  Ausfall in der Nacht, das meiste davon der Start von Confluence.
+- **Geänderte Konfigurationsdateien**: dpkg behält die lokale Version
+  (`--force-confold`), statt das Paket stillschweigend dauerhaft auszulassen.
+- **Nicht enthalten**: Ubuntu-Release-Upgrades (24.04 → 26.04) bleiben Handarbeit. Der
+  Azure Monitor Agent aktualisiert sich über `automatic_upgrade_enabled`
+  (`terraform/monitoring.tf`), die Container über Renovate (oben).
+
+Kontrolle auf der VM:
+```bash
+systemctl list-timers apt-daily-upgrade.timer dpv-reboot-if-required.timer
+cat /run/reboot-required.pkgs 2>/dev/null                         # wartet ein Neustart, und wofür?
+journalctl -u dpv-reboot-if-required.service                      # vergangene Sonntags-Neustarts
+sudo tail -50 /var/log/unattended-upgrades/unattended-upgrades.log
+sudo unattended-upgrade --dry-run --debug 2>&1 | grep -A6 'Allowed origins'
+```
+
+## Container-Logs (30 Tage)
+
+Alle Container schreiben ins systemd-Journal der VM (`x-logging` in jeder
+`compose/docker-compose*.yml`), journald hebt die Logs 30 Tage auf
+(`scripts/journald/10-dpv-retention.conf`). Vorher lagen sie in Dockers json-Dateien,
+und die verschwinden mit dem Container — bei jedem Update, jeder geänderten
+Konfiguration. Bei der PHP2Shell-Prüfung im Oktober 2026 fehlten deshalb genau die Tage,
+um die es ging. Caddy schreibt außerdem ein Access-Log für alle vier Seiten (vorher nur
+fehlgeschlagene Anfragen): Client-IP, Methode, Pfad, Status, Header. `Authorization` und
+`Cookie` schwärzt Caddy selbst.
+
+- **Wie lange**: 30 Tage, gelöscht tageweise. Höchstens 5 GB, und journald lässt auf `/`
+  mindestens 10 GB frei, damit Logs allein nie den Platten-Alert (unter 20 % frei)
+  auslösen. Wird eine der Grenzen vorher erreicht, fallen die ältesten Tage früher weg —
+  `journalctl --disk-usage` zeigt den Stand.
+- **Neuer Dienst**: braucht `logging: *logging`, sonst landen seine Logs wieder in einer
+  json-Datei, die mit dem Container verschwindet.
+- **Datenschutz**: Die Logs enthalten IP-Adressen und Benutzernamen. Zweck (Sicherheit
+  des Betriebs) und Frist gehören ins Verarbeitungsverzeichnis. Azure Backup sichert die
+  OS-Platte mit und hält jeden Stand 7 Tage (siehe „Backup-Ebene 2"), eine Logzeile gibt
+  es dort also bis zu 37 Tage lang.
+
+Abfragen auf der VM (`docker logs` geht weiterhin, zeigt aber nur den laufenden Container):
+```bash
+sudo journalctl -t dpv-core-nextcloud-1 --since "2026-11-01 10:00" --until "2026-11-01 11:00"
+sudo journalctl -t dpv-core-caddy-1 --since today -o cat | jq -c 'select(.status >= 500) | [(.ts|todate), .request.client_ip, .request.method, .request.uri, .status]'
+sudo journalctl --disk-usage
+```
+
+**Umstellung**: Der Sonntags-Update-Lauf, der diesen Commit zieht, erstellt einmal alle
+Container neu (ihre `logging`-Konfiguration hat sich geändert), auch Postgres und
+Confluence — ein paar Minuten Ausfall um 03:30 UTC. Caddy liest dabei das neue
+Caddyfile. Die bisherigen json-Logs verschwinden mit den alten Containern.
+
+## Speicher (Limits, zram)
+
+Am 11.11.2026 ging der VM der RAM aus: 151 Apache-Worker von Nextcloud neben Postgres,
+Confluence und Keycloak, kein Swap, keine Limits. Der OOM-Killer beendete mehrere
+Container, die Maschine war rund 20 Minuten nicht erreichbar. Seitdem:
+
+- **Nextcloud** startet höchstens 30 Apache-Worker (`compose/nextcloud-mpm.conf`, vorher
+  150). Ein Ansturm wartet in Apaches Warteschlange, statt Speicher zu fressen. Mehr
+  Worker nur zusammen mit einem höheren `mem_limit`.
+- **`mem_limit` je Container** — läuft einer davon, beendet der Kernel nur Prozesse in
+  dessen Container. Postgres und Caddy haben bewusst keins (Postgres bekommt, was übrig
+  bleibt), aber `oom_score_adj: -500`, damit der OOM-Killer sie als Letzte trifft.
+- **zram-Swap**: komprimierter Swap im RAM, halbe RAM-Größe, zstd
+  (`scripts/systemd/zram-generator.conf.d/10-dpv-zram.conf`). Gibt dem Kernel Luft, ohne auf die OS-Platte
+  auszulagern.
+- **Alert**, wenn weniger als 2 GB RAM verfügbar sind (`terraform/monitoring.tf`).
+- **Rate-Limit in Caddy** pro Client-IP und Minute: auth 300, wiki 600, cloud 1200,
+  office keins. Aufrufe aus dem Docker-Netz zählen nicht (Collabora ↔ Nextcloud).
+  Darüber antwortet Caddy mit 429 und `Retry-After`.
+
+Kontrolle auf der VM:
+```bash
+swapon --show                                                     # /dev/zram0, ~7,8 GB
+sudo docker stats --no-stream --format "table {{.Name}}\t{{.MemUsage}}"
+sudo journalctl -k | grep -i oom                                  # hat der OOM-Killer zugeschlagen?
+sudo journalctl -t dpv-core-caddy-1 --since today -o cat | jq -r 'select(.status == 429) | .request.client_ip' | sort | uniq -c
+```
+Taucht in der letzten Abfrage regelmäßig eine normale Nutzer-IP auf, ist das Limit für
+diese Seite zu knapp (`compose/Caddyfile`).
 
 ## Repo-Struktur
 
@@ -549,5 +687,5 @@ Dateien einmalig zu kopieren).
 bootstrap/    einmaliger Storage Account fürs Terraform-Remote-State (eigenes State)
 terraform/    eigentliche Infrastruktur (VM, Platten, Netzwerk, Key Vault, Backup, Monitoring)
 compose/      Docker-Compose-Definitionen + Caddyfile, laufen auf der VM
-scripts/      cloud-init-Template, Secret-Fetch-Skript, pgBackRest-Config-Template, Backup-Cron, Update-Skript + systemd-Units
+scripts/      cloud-init-Template, Secret-Fetch-Skript, pgBackRest-Config-Template, Backup-Cron, Update-Skript, apply-host-config.sh (spielt die Host-Dateien daneben ein: systemd-Units, apt-Config für OS-Updates, journald-Config für Container-Logs, zram-Config)
 ```

@@ -1,8 +1,47 @@
 {
 	email {$LETSENCRYPT_EMAIL}
+	# Third-party directive (caddy/Dockerfile), so Caddy needs to be told where
+	# it runs relative to the others.
+	order rate_limit before basicauth
+}
+
+# Per-client request ceiling, a safety net against a flood (misbehaving sync
+# client, scraper, bot) piling up in the backends — on 2026-11-11 that exhausted
+# the VM's memory. Deliberately generous: it must never trip for normal use,
+# only for something far outside it. Requests over the limit get 429 with a
+# Retry-After header, which well-behaved clients (including Nextcloud's) honour.
+#
+# Only public clients are counted. Collabora's WOPI callbacks and Nextcloud's
+# discovery fetch reach Caddy from inside the Docker network (see the aliases in
+# docker-compose.nextcloud.yml), i.e. all from one address; counting them would
+# throttle every editor session at once.
+#
+# Usage: import ratelimit <zone name> <events per minute>
+(ratelimit) {
+	@public_{args[0]} not remote_ip private_ranges
+	rate_limit @public_{args[0]} {
+		zone {args[0]} {
+			key {remote_host}
+			events {args[1]}
+			window 1m
+		}
+	}
+}
+
+# Access log, imported by every site below. Without it Caddy only logs requests
+# that failed, so in October 2026 nothing showed who had sent what to Nextcloud.
+# JSON on stderr, which Docker hands to journald (30 days, see x-logging in
+# docker-compose.yml). Caddy redacts the Authorization and Cookie headers itself.
+(access_log) {
+	log {
+		output stderr
+		format json
+	}
 }
 
 {$DOMAIN_AUTH} {
+	import ratelimit auth 300
+	import access_log
 	reverse_proxy keycloak:8080
 }
 
@@ -11,6 +50,8 @@
 # or /etc/hosts entry needed. Switching to wiki.dpvonline.de later is the same
 # as for DOMAIN_AUTH: change the Key Vault secret, restart dpv-compose.service.
 {$DOMAIN_WIKI} {
+	import ratelimit wiki 600
+	import access_log
 	reverse_proxy confluence:8090
 }
 
@@ -19,6 +60,9 @@
 # docker-compose.nextcloud.yml is part of the stack these answer 502, which is
 # harmless.
 {$DOMAIN_CLOUD} {
+	# Sync clients are chatty (one PROPFIND per folder), hence the higher value.
+	import ratelimit cloud 1200
+	import access_log
 	# CalDAV/CardDAV discovery for calendar and contacts clients. Handled here
 	# because Nextcloud's own .htaccess rule would redirect to http:// behind a
 	# TLS-terminating proxy.
@@ -30,5 +74,6 @@
 
 # WebSockets (the editor session) pass through reverse_proxy without extra config.
 {$DOMAIN_OFFICE} {
+	import access_log
 	reverse_proxy collabora:9980
 }
