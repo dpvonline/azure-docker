@@ -536,10 +536,14 @@ war). Ablauf:
 4. `docker compose pull && docker compose up -d --build`.
 5. Health-Check-Schleife (bis zu 5 Minuten): alle Services `running`, Keycloak-Health
    (`/health/ready`), Postgres (`pg_isready`).
-6. Bei Erfolg: Log-Eintrag nach `/var/log/dpv-update.log`, fertig.
+6. Bei Erfolg: Images und Build-Cache, die kein Container mehr nutzt, löschen
+   (`docker image prune -af`, `docker builder prune -f`), freien Platz und Log-Eintrag
+   nach `/var/log/dpv-update.log`, fertig. Ohne das blieb jede alte Version liegen —
+   bis November 2026 gut 20 GB der 46-GB-OS-Platte.
 7. Bei Fehlschlag (Pull/Build/Health-Check): `git reset --hard` auf den gemerkten
-   Commit + `docker compose up -d --build` — Rollback auf den vorherigen Stand (alte
-   Images liegen i. d. R. noch lokal im Cache, kein erneuter Pull nötig).
+   Commit + `docker compose up -d --build` — Rollback auf den vorherigen Stand (die
+   alten Images liegen noch lokal, weil erst nach einem erfolgreichen Lauf aufgeräumt
+   wird; ein späteres Zurückdrehen von Hand lädt sie neu).
 
 **Ehrliche Grenze**: das Rollback bringt den Container-Stand zurück, aber falls eine
 DB-Migration (Keycloak führt bei *jeder* Versionsänderung welche aus, nicht nur bei
