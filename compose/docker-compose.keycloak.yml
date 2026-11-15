@@ -1,7 +1,14 @@
+# Logging to journald, see docker-compose.yml.
+x-logging: &logging
+  driver: journald
+  options:
+    tag: "{{.Name}}"
+
 services:
   keycloak:
     image: quay.io/keycloak/keycloak:26.7
     restart: unless-stopped
+    logging: *logging
     depends_on:
       - postgres
     networks:

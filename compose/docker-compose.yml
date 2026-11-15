@@ -17,10 +17,24 @@ volumes:
   caddy_data:
   caddy_config:
 
+# Every service logs to the host's systemd journal instead of Docker's json
+# files. Those disappear with the container — on every update or config change —
+# which in October 2026 left the PHP2Shell check without the days that mattered.
+# journald keeps them 30 days, across recreation
+# (scripts/journald/10-dpv-retention.conf, README "Container-Logs"). Anchors
+# only work within one file, so each compose file repeats this block, and a new
+# service needs `logging: *logging` as well.
+x-logging: &logging
+  driver: journald
+  options:
+    # journalctl -t dpv-core-<service>-1
+    tag: "{{.Name}}"
+
 services:
   caddy:
     image: caddy:2.11-alpine
     restart: unless-stopped
+    logging: *logging
     # Map form (not a list) so docker-compose.nextcloud.yml can add network
     # aliases to it.
     networks:

@@ -1,8 +1,15 @@
+# Logging to journald, see docker-compose.yml.
+x-logging: &logging
+  driver: journald
+  options:
+    tag: "{{.Name}}"
+
 services:
   postgres:
     build: ./postgres
     image: dpv-postgres:18-pgbackrest
     restart: unless-stopped
+    logging: *logging
     networks:
       - dpv
     environment:
