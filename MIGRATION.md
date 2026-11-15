@@ -433,8 +433,8 @@ als Datenplatte. Eine Garantie für den Tag des Umzugs ist das nicht (siehe Roll
   Keycloak und Wiki liefen von 13:38 bis 14:04 dagegen (Logins scheiterten).
   Geschrieben wurde in die echten Daten nichts, und pgBackRest wies das fremde
   Cluster wegen der anderen system-id ab. Behoben per Hand: Stack gestoppt, leeres
-  Cluster nach `/root/pgdata-leeres-cluster-os-platte` verschoben, LUN 0 und 2
-  eingehängt. Seitdem wartet cloud-init bis zu 30 Minuten, `boot.sh` startet den
+  Cluster nach `/root/pgdata-leeres-cluster-os-platte` verschoben (am 15.11.
+  gelöscht), LUN 0 und 2 eingehängt. Seitdem wartet cloud-init bis zu 30 Minuten, `boot.sh` startet den
   Stack nur mit allen drei Mounts, und Docker selbst startet erst, wenn sie da sind
   (`scripts/systemd/docker.service.d/`).
 - Livepatch gibt es auf ARM64 nicht (`pro status`: `n/a`), ESM läuft.
@@ -605,7 +605,9 @@ Anhang öffnen, Suche, Anmeldung bei Nextcloud, Confluence-Log auf `ERROR` prüf
   nach einem Neustart.
 - `systemctl list-timers 'dpv-*'` zeigt beide Timer, `/etc/cron.d/pgbackrest-full`
   existiert.
-- Nach einer unauffälligen Woche `/data/apps/pre-arm64` löschen.
+- Nach einer unauffälligen Woche `/data/apps/pre-arm64` löschen. *Erledigt am 15.11.,
+  zusammen mit dem Confluence-Dump aus Cutover A in `/data/apps/migration` und
+  `/root/boot.sh.vor-mount-check`.*
 
 ### Rollback
 
@@ -904,8 +906,8 @@ Prüfen.
 - Lightsail steht im Wartungsmodus, der Host-Cron ist entfernt. Erreichbar per SSH
   jetzt nur noch über die IP `3.65.3.213`, Port 1987 — `cloud.dpvonline.de` zeigt auf
   die VM.
-- Aufgeräumt am 15.11., nach drei Wochen ohne Beschwerden (siehe „Danach"). Offen
-  ist nur noch Lightsail selbst.
+- Aufgeräumt am 15.11., nach drei Wochen ohne Beschwerden, Lightsail samt EFS
+  gelöscht (siehe „Danach").
 
 **Vorfall: PHP-Abstürze ab 23.10.** Nextcloud fiel wiederholt aus (Caddy: 502), bis
 der Container neu gestartet wurde. Ursache: Apache-Kindprozesse beendeten sich mit
@@ -996,21 +998,19 @@ beide aus dem eingefrorenen Stand.
 - Lightsail **im Wartungsmodus** weiterlaufen lassen, bis alles durchgetestet ist. So
   bleibt es Rollback-Ziel, aber Clients mit altem DNS-Eintrag schreiben nicht mehr
   dorthin.
-- Aufräumen, wenn alles als funktionsfähig gemeldet ist — *erledigt am 15.11.*, bis
-  auf die zwei Punkte in Keycloak:
+- Aufräumen, wenn alles als funktionsfähig gemeldet ist — *erledigt am 15.11.*:
   - `3.65.3.213/32` aus `ADMIN_IP_CIDRS`, `terraform apply`
-  - Migrationsschlüssel aus `~dpvadmin/.ssh/authorized_keys` der VM. Auf Lightsail
-    blieb `/root/.ssh/dpv-migration_ed25519*` liegen, die Instanz war per SSH nicht mehr
-    erreichbar; der Schlüssel öffnet nichts mehr und geht mit der Instanz.
+  - Migrationsschlüssel aus `~dpvadmin/.ssh/authorized_keys` der VM; auf Lightsail
+    ging er mit der Instanz.
   - `nextcloud-mariadb` samt Image und `/data/apps/nextcloud-mariadb`,
     `/root/config.php.before-pgsql*` und die Migrationsreste in `/root`
   - `oidc_login`: App, die `oidc_login_*`-Werte aus `config.php` und seine Zeilen in
     `oc_appconfig`/`oc_preferences`. `occ app:remove` entfernt nur aktivierte Apps,
     deshalb erst die Werte löschen (dann leitet sie nichts mehr um), kurz aktivieren,
     entfernen. `/root/sso` und `/root/verify` auf der VM
-  - **Offen, in Keycloak:** Client `nextcloud-test` löschen, im Client `nextcloud` die
-    alte Redirect-URI `/apps/oidc_login/oidc` entfernen
-- Beim Abschalten von Lightsail **auch beide EFS löschen** (Nutzerdaten und Backups,
+  - In Keycloak: Client `nextcloud-test` gelöscht, im Client `nextcloud` die alte
+    Redirect-URI `/apps/oidc_login/oidc` entfernt
+- *Erledigt am 15.11.:* Beim Abschalten von Lightsail **auch beide EFS löschen** (Nutzerdaten und Backups,
   zusammen >300 GB) — sie hängen nicht an der Instanz und kosten allein weiter. Das
   EFS hat ein eigenes AWS-Backup; dessen Aufbewahrung vorher prüfen.
 
