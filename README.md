@@ -379,8 +379,9 @@ verifiziert.
 pgBackRest deckt Postgres ab — und sonst nichts. Die Nutzerdateien von Nextcloud, das
 Confluence-Home und die OS-Platte brauchen eine eigene Sicherung, dafür steht
 `terraform/backup.tf`: ein Recovery Services Vault mit täglichem VM-Backup um 01:00 UTC
-(vor dem 02:00-pgBackRest-Lauf und dem Sonntags-Update um 03:30), Aufbewahrung 14 Tage
-täglich / 6 Wochen / 6 Monate.
+(vor dem 02:00-pgBackRest-Lauf und dem Sonntags-Update um 03:30), Aufbewahrung 7 Tage
+— nur tägliche Punkte, keine wöchentlichen oder monatlichen. Für Postgres reicht weiter
+zurück pgBackRest mit seiner eigenen Point-in-Time-Recovery.
 
 Die Policy ist zwingend eine **Enhanced Policy** (`policy_type = "V2"`). Die
 Standard-Policy kann VMs mit Premium-SSD-v2- oder Ultra-Datenplatten überhaupt nicht
@@ -392,9 +393,10 @@ Policy, und ein Protected Item kann nicht zwischen Standard und Enhanced wandern
 müsste neu angelegt werden.
 
 Enhanced erlaubt bis zu 30 Tage Instant-Restore-Snapshots (Standard nur 5); hier sind es
-**7 Tage**. Diese Snapshots liegen neben den Platten und machen eine Rücksicherung am
-selben Tag schnell, werden aber als Snapshot-Speicher berechnet — bei ~150 GB
-Nextcloud-Daten ist das der Punkt, an dem eine längere Aufbewahrung merklich Geld kostet.
+**2 Tage**. Diese Snapshots liegen neben den Platten und machen eine Rücksicherung der
+letzten zwei Tage schnell, werden aber als Snapshot-Speicher berechnet — bei ~150 GB
+Nextcloud-Daten pro Kopie. Ältere Punkte kommen aus dem Vault und brauchen länger, was
+reicht, weil nie mehr als 7 Tage zurück gebraucht werden.
 
 Zwei Eigenschaften, die im Ernstfall zählen:
 
@@ -634,8 +636,8 @@ fehlgeschlagene Anfragen): Client-IP, Methode, Pfad, Status, Header. `Authorizat
   json-Datei, die mit dem Container verschwindet.
 - **Datenschutz**: Die Logs enthalten IP-Adressen und Benutzernamen. Zweck (Sicherheit
   des Betriebs) und Frist gehören ins Verarbeitungsverzeichnis. Azure Backup sichert die
-  OS-Platte mit, dort bleiben sie so lange wie die Sicherung (bis zu 6 Monate, siehe
-  „Backup-Ebene 2").
+  OS-Platte mit und hält jeden Stand 7 Tage (siehe „Backup-Ebene 2"), eine Logzeile gibt
+  es dort also bis zu 37 Tage lang.
 
 Abfragen auf der VM (`docker logs` geht weiterhin, zeigt aber nur den laufenden Container):
 ```bash
