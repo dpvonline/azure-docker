@@ -6,7 +6,7 @@ x-logging: &logging
 
 services:
   keycloak:
-    image: quay.io/keycloak/keycloak:26.7
+    image: quay.io/keycloak/keycloak:26.8
     restart: unless-stopped
     logging: *logging
     depends_on:
