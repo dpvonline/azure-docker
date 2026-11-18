@@ -673,33 +673,47 @@ Postgres-Instanz und einer eigenen Caddy-Route.
 
 ```
 PR gemerged → "Prüfungen" auf main grün → Workflow "Abbild veröffentlichen" (App-Repo)
-  → ghcr.io/sebivtt/dpv-participant-management:latest (+ :sha-<Commit>), linux/arm64
+  → ghcr.io/sebivtt/dpv-participant-management:<Version>, :sha-<Commit>, :latest (linux/arm64)
   → dpv-anmeldetool-deploy.timer (alle 5 Minuten, auf der VM) → scripts/deploy-anmeldetool.sh
-  → pull, Neustart, Healthcheck, bei Fehler Rollback
+  → Version aus "latest" lesen, genau diese Version holen, Neustart, Healthcheck, bei Fehler Rollback
 ```
+
+**Versionen.** Jeder Merge bekommt `JJJJ.MM.TT-<Laufnummer>`, z. B. `2026.11.18-42` (UTC-Datum und
+Laufnummer des Workflows, aufsteigend und eindeutig). Das Image trägt sie als Label
+`org.opencontainers.image.version`. `latest` ist nur ein Zeiger auf die neueste Version; der Server
+startet nie `latest`, sondern immer eine feste Version (`ANMELDETOOL_VERSION`). Welche läuft, steht
+in `/var/lib/dpv/anmeldetool-version` und in `compose/.env`; `fetch-secrets.sh` schreibt sie nach
+einem Neustart der VM zurück. Ein Rollback ist damit einfach die vorherige Version, und ein Reboot
+oder der wöchentliche Update-Lauf startet nie ein anderes Abbild als das, das zuletzt gesund war.
 
 **Warum Pull statt Push.** SSH ist nur aus `ADMIN_IP_CIDRS` offen (`terraform/network.tf`), GitHub
 Actions hat keine feste Adresse. Die VM holt das Abbild deshalb selbst; es wird kein Port geöffnet.
 Ein Merge ist spätestens nach rund 5 Minuten (Build + Timer) live.
 
+**Was wo passiert.** In `compose/docker-compose.anmeldetool.yml`: Der einmalige Dienst
+`anmeldetool-db-init` legt Rolle und Datenbank `anmeldetool` in der gemeinsamen Postgres an
+(idempotent; `init-db.sql` läuft auf dem bestehenden Cluster nicht mehr) und gleicht das Passwort
+mit Key Vault ab. Die Migrationen führt das Tool selbst beim Start aus (`docker/start.sh` im Image),
+sie zählen also zum Healthcheck. Das Skript entscheidet nur, welche Version läuft.
+
 **Was `deploy-anmeldetool.sh` tut** (Ablauf wie `update-containers.sh`):
 
-1. Läuft nichts Neues (gleiche Image-ID wie im laufenden Container) oder ist der Dienst nicht Teil
-   des Stacks: still beenden. Während `dpv-update.service` läuft, setzt es aus.
-2. Rolle und Datenbank `anmeldetool` in der gemeinsamen Postgres anlegen (idempotent; `init-db.sql`
-   läuft auf dem bestehenden Cluster nicht mehr) und das Passwort mit Key Vault abgleichen.
+1. Ist `latest` dieselbe Version wie die laufende, oder ist der Dienst nicht Teil des Stacks: still
+   beenden. Während `dpv-update.service` läuft, setzt es aus.
+2. Neue Version genau holen (`:<Version>`).
 3. Vor einem Update über eine laufende Version: inkrementelles pgBackRest-Backup. Schlägt es fehl,
-   bleibt alles, wie es ist. Das Tool führt beim Start `migrate` aus.
-4. `docker compose up -d`, dann bis zu 4 Minuten auf `healthy` warten.
-5. Nicht gesund: das vorherige Abbild wird wieder als `latest` getaggt und gestartet; die ID des
-   schlechten Abbilds wird in `/var/lib/dpv/anmeldetool-failed-image` gemerkt, damit nicht alle
-   5 Minuten derselbe Fehlversuch läuft. Erst ein neueres Abbild löst den nächsten Versuch aus.
-   Die Unit endet dann rot (`systemctl --failed`), Details in `/var/log/dpv-update.log`.
+   bleibt alles, wie es ist.
+4. `docker compose up -d` mit der neuen Version, dann bis zu 4 Minuten auf `healthy` warten. Erst
+   danach wird sie als laufende Version gespeichert.
+5. Nicht gesund: die vorherige Version wird wieder gestartet; die schlechte wird in
+   `/var/lib/dpv/anmeldetool-failed-version` gemerkt, damit nicht alle 5 Minuten derselbe
+   Fehlversuch läuft. Erst eine neuere Version löst den nächsten Versuch aus. Die Unit endet dann
+   rot (`systemctl --failed`), Details in `/var/log/dpv-update.log`.
 
 **Grenzen.** Ein Rollback macht Datenbank-Migrationen nicht rückgängig; die Sicherung aus Schritt 3
-ist der Weg zurück, falls ein Schema nicht abwärtskompatibel war. Der wöchentliche
-`update-containers.sh` zieht das Abbild ebenfalls (`compose pull`); ein dabei gestartetes, bekannt
-schlechtes Abbild korrigiert erst der nächste Timerlauf.
+ist der Weg zurück, falls ein Schema nicht abwärtskompatibel war. Eine bestimmte Version von Hand
+starten: `ANMELDETOOL_VERSION=<Version> docker compose up -d anmeldetool anmeldetool-aufraeumen`
+(der Timer stellt sie beim nächsten neuen `latest` wieder um).
 
 ### Einmalig einrichten
 

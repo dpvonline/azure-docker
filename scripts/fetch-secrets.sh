@@ -32,6 +32,9 @@ DOMAIN_ANMELDETOOL="$(get_secret domain-anmeldetool 2>/dev/null || true)"
 ANMELDETOOL_KEYCLOAK_CLIENT_SECRET="$(get_secret anmeldetool-keycloak-client-secret 2>/dev/null || true)"
 POSTGRES_ANMELDETOOL_PASSWORD="$(get_secret postgres-anmeldetool-password 2>/dev/null || true)"
 ANMELDETOOL_DJANGO_SECRET_KEY="$(get_secret anmeldetool-django-secret-key 2>/dev/null || true)"
+# Not from Key Vault: the version that deploy-anmeldetool.sh last rolled out successfully.
+# .env is rewritten at every boot, so without this a reboot would forget it.
+ANMELDETOOL_VERSION="$(cat /var/lib/dpv/anmeldetool-version 2>/dev/null || true)"
 
 DOMAIN_AUTH="$(get_secret domain-auth)"
 DOMAIN_WIKI="$(get_secret domain-wiki)"
@@ -79,6 +82,7 @@ DOMAIN_WIKI=${DOMAIN_WIKI}
 DOMAIN_CLOUD=${DOMAIN_CLOUD}
 DOMAIN_OFFICE=${DOMAIN_OFFICE}
 DOMAIN_ANMELDETOOL=${DOMAIN_ANMELDETOOL}
+ANMELDETOOL_VERSION=${ANMELDETOOL_VERSION}
 LETSENCRYPT_EMAIL=${LETSENCRYPT_EMAIL}
 POSTGRES_SUPERUSER_PASSWORD=${POSTGRES_SUPERUSER_PASSWORD}
 POSTGRES_KEYCLOAK_PASSWORD=${POSTGRES_KEYCLOAK_PASSWORD}

@@ -3,8 +3,10 @@
 # Vorlage, siehe README, Abschnitt "Anmeldetool: Image-Pipeline").
 #
 # Baut nach jedem grünen Lauf von "Prüfungen" auf main das Container-Abbild und legt es in der
-# GitHub Container Registry ab. Auf dem Server holt dpv-anmeldetool-deploy.timer das neue Abbild
-# von dort und startet es (scripts/deploy-anmeldetool.sh im Repo dpvonline/azure-docker).
+# GitHub Container Registry ab. Auf dem Server liest dpv-anmeldetool-deploy.timer aus "latest"
+# die Version (Label org.opencontainers.image.version), holt genau diese Version und startet sie
+# (scripts/deploy-anmeldetool.sh im Repo dpvonline/azure-docker). Der Server läuft immer auf einer
+# festen Version, nie auf "latest"; "latest" zeigt nur auf die neueste.
 #
 # Warum workflow_run statt "on: push": So wird nur ein Stand veröffentlicht, dessen Prüfungen
 # (ci.yml) grün sind, und es wird genau der geprüfte Commit gebaut. Ein Merge mit roter
@@ -57,15 +59,24 @@ jobs:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
+      # Version je Merge: Datum (UTC) und Laufnummer dieses Workflows, z. B. 2026.11.18-42. Die
+      # Laufnummer steigt mit jedem Lauf, die Versionen sind also eindeutig und aufsteigend.
+      - id: version
+        run: echo "version=$(date -u +%Y.%m.%d)-${{ github.run_number }}" >> "$GITHUB_OUTPUT"
       - id: meta
         uses: docker/metadata-action@v6.2.0
         with:
           images: ${{ env.ABBILD }}
-          # sha-<Commit>: unveränderlich, zum Nachvollziehen und für einen Rollback von Hand.
-          # latest: das, was der Server zieht.
+          # <Version>: das, was der Server startet; wird nie überschrieben.
+          # sha-<Commit>: zum Nachvollziehen, welcher Stand in welcher Version steckt.
+          # latest: nur ein Zeiger auf die neueste Version, den der Server abfragt.
           tags: |
+            type=raw,value=${{ steps.version.outputs.version }}
             type=sha,format=long
             type=raw,value=latest
+          # Die Version steht im Abbild selbst; daran erkennt der Server, welche Version "latest" ist.
+          labels: |
+            org.opencontainers.image.version=${{ steps.version.outputs.version }}
       - uses: docker/build-push-action@v7.4.0
         with:
           context: .
