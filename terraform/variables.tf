@@ -98,6 +98,17 @@ variable "DOMAIN_OFFICE" {
   description = "Hostname Collabora Online will be reachable under. Same pattern as DOMAIN_CLOUD: office.scout-tools.de for testing, office.dpvonline.de at Cutover B."
 }
 
+variable "DOMAIN_ANMELDETOOL" {
+  type        = string
+  default     = null
+  description = "Hostname of the DPV Anmeldetool (test environment), a subdomain of scout-tools.de, e.g. anmeldetool.scout-tools.de (dns.tf manages the A/AAAA records). Leave unset to keep the tool out of the stack; it joins once this, the Keycloak client secret and the generated secrets exist in Key Vault (see fetch-secrets.sh and README, 'Anmeldetool: Image-Pipeline')."
+
+  validation {
+    condition     = var.DOMAIN_ANMELDETOOL == null ? true : endswith(var.DOMAIN_ANMELDETOOL, ".scout-tools.de")
+    error_message = "DOMAIN_ANMELDETOOL must be a subdomain of scout-tools.de (dns.tf derives the record name from it)."
+  }
+}
+
 variable "LETSENCRYPT_EMAIL" {
   type        = string
   description = "Contact address Caddy hands to Let's Encrypt"

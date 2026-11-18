@@ -77,3 +77,14 @@
 	import access_log
 	reverse_proxy collabora:9980
 }
+
+# DPV-Anmeldetool (docker-compose.anmeldetool.yml). Until that file is part of the
+# stack this answers 502, which is harmless. Gunicorn trusts X-Forwarded-Proto from
+# this proxy (DJANGO_BEHIND_HTTPS_PROXY=1 in anmeldetool.env); reverse_proxy
+# overwrites a value sent by the client, which is what the app's docs/betrieb.md
+# requires of the proxy in front.
+{$DOMAIN_ANMELDETOOL} {
+	import ratelimit anmeldetool 600
+	import access_log
+	reverse_proxy anmeldetool:8000
+}

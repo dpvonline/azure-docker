@@ -1,0 +1,11 @@
+[Unit]
+Description=Roll out a new Anmeldetool image from GHCR (pull, restart, health check, rollback)
+After=network-online.target docker.service dpv-compose.service
+Wants=network-online.target
+Requires=docker.service
+
+[Service]
+Type=oneshot
+ExecStart=/opt/dpv/scripts/deploy-anmeldetool.sh
+# Pull + incremental backup + up to 4 minutes of health check, with room to spare.
+TimeoutStartSec=900

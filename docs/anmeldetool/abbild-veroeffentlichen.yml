@@ -1,0 +1,80 @@
+# Gehört in das Repo sebivtt/dpv-participant-management, nach
+# .github/workflows/abbild-veroeffentlichen.yml (nicht in dieses Repo: hier liegt nur die
+# Vorlage, siehe README, Abschnitt "Anmeldetool: Image-Pipeline").
+#
+# Baut nach jedem grünen Lauf von "Prüfungen" auf main das Container-Abbild und legt es in der
+# GitHub Container Registry ab. Auf dem Server holt dpv-anmeldetool-deploy.timer das neue Abbild
+# von dort und startet es (scripts/deploy-anmeldetool.sh im Repo dpvonline/azure-docker).
+#
+# Warum workflow_run statt "on: push": So wird nur ein Stand veröffentlicht, dessen Prüfungen
+# (ci.yml) grün sind, und es wird genau der geprüfte Commit gebaut. Ein Merge mit roter
+# Prüfung erreicht den Server nie.
+name: Abbild veröffentlichen
+
+on:
+  workflow_run:
+    workflows: ["Prüfungen"]
+    types: [completed]
+    branches: [main]
+
+permissions:
+  contents: read
+
+# Nie abbrechen: Ein halb hochgeladenes Abbild wäre schlimmer als ein wartender Lauf. Zwei Merges
+# kurz hintereinander laufen nacheinander, der spätere gewinnt bei "latest".
+concurrency:
+  group: abbild-veroeffentlichen
+  cancel-in-progress: false
+
+env:
+  ABBILD: ghcr.io/${{ github.repository }}
+
+jobs:
+  bauen:
+    name: Abbild bauen und nach GHCR hochladen
+    # Nur nach einem grünen Push-Lauf auf main, nie nach einem Pull Request (auch nicht aus einem Fork).
+    if: >-
+      github.event.workflow_run.conclusion == 'success' &&
+      github.event.workflow_run.event == 'push' &&
+      github.event.workflow_run.head_branch == 'main'
+    # Der Server ist ARM64 (Standard_D4ps_v6). Der ARM-Runner baut das native, ohne Emulation;
+    # für öffentliche Repos kostenlos.
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 20
+    permissions:
+      contents: read
+      # Nur hier darf der Lauf ins Paketverzeichnis schreiben; der Prüf-Workflow bleibt bei "read".
+      packages: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          # Genau der Stand, dessen Prüfungen grün waren, auch wenn main inzwischen weiter ist.
+          ref: ${{ github.event.workflow_run.head_sha }}
+          persist-credentials: false
+      - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
+      - uses: docker/login-action@8aa5831fb8d48d8f76594c7ddde61ae58019f550 # v4.8.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - id: meta
+        uses: docker/metadata-action@dc802804100637a589fabce1cb79ff13a1411302 # v6.2.0
+        with:
+          images: ${{ env.ABBILD }}
+          # sha-<Commit>: unveränderlich, zum Nachvollziehen und für einen Rollback von Hand.
+          # latest: das, was der Server zieht.
+          tags: |
+            type=sha,format=long
+            type=raw,value=latest
+      - uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
+        with:
+          context: .
+          push: true
+          platforms: linux/arm64
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          # Ein einfaches Abbild ohne zusätzlichen Beglaubigungs-Eintrag, damit "docker pull" auf
+          # dem Server ein einziges Manifest sieht.
+          provenance: false
+          cache-from: type=gha
+          cache-to: type=gha,mode=max

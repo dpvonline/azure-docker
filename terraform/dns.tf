@@ -27,3 +27,23 @@ resource "azurerm_dns_zone" "scout_tools" {
     prevent_destroy = true
   }
 }
+
+# DPV Anmeldetool (docker-compose.anmeldetool.yml), test name under scout-tools.de. Only
+# when DOMAIN_ANMELDETOOL is set; the record name is that hostname minus the zone.
+resource "azurerm_dns_a_record" "anmeldetool" {
+  count               = var.DOMAIN_ANMELDETOOL == null ? 0 : 1
+  name                = trimsuffix(var.DOMAIN_ANMELDETOOL, ".${azurerm_dns_zone.scout_tools.name}")
+  zone_name           = azurerm_dns_zone.scout_tools.name
+  resource_group_name = azurerm_dns_zone.scout_tools.resource_group_name
+  ttl                 = 60
+  target_resource_id  = azurerm_public_ip.vm.id
+}
+
+resource "azurerm_dns_aaaa_record" "anmeldetool" {
+  count               = var.DOMAIN_ANMELDETOOL == null ? 0 : 1
+  name                = trimsuffix(var.DOMAIN_ANMELDETOOL, ".${azurerm_dns_zone.scout_tools.name}")
+  zone_name           = azurerm_dns_zone.scout_tools.name
+  resource_group_name = azurerm_dns_zone.scout_tools.resource_group_name
+  ttl                 = 60
+  target_resource_id  = azurerm_public_ip.vm_v6.id
+}

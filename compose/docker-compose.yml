@@ -53,6 +53,10 @@ services:
       # blocks for both, and an empty site address would stop Caddy entirely.
       DOMAIN_CLOUD: ${DOMAIN_CLOUD}
       DOMAIN_OFFICE: ${DOMAIN_OFFICE}
+      # Same reason as DOMAIN_CLOUD: the Caddyfile has a site block for it, and an empty
+      # address would stop Caddy, and with it Keycloak and Confluence. The .localhost
+      # fallback gets an internal certificate, no Let's Encrypt request.
+      DOMAIN_ANMELDETOOL: ${DOMAIN_ANMELDETOOL:-anmeldetool.localhost}
       LETSENCRYPT_EMAIL: ${LETSENCRYPT_EMAIL}
     volumes:
       - ./Caddyfile:/etc/caddy/Caddyfile:ro

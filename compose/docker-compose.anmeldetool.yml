@@ -1,0 +1,70 @@
+# DPV-Anmeldetool (github.com/sebivtt/dpv-participant-management), Testumgebung.
+#
+# Part of the stack only once fetch-secrets.sh finds domain-anmeldetool and
+# anmeldetool-keycloak-client-secret in Key Vault (see COMPOSE_FILE there). The image
+# is not built here: the app repo's workflow pushes it to GHCR, and
+# scripts/deploy-anmeldetool.sh (dpv-anmeldetool-deploy.timer) pulls and restarts it.
+# Pipeline and one-time setup: README, "Anmeldetool: Image-Pipeline".
+
+# Logging to journald, see docker-compose.yml.
+x-logging: &logging
+  driver: journald
+  options:
+    tag: "{{.Name}}"
+
+services:
+  anmeldetool:
+    # `latest` is what the workflow pushes after every merge to main that passed its
+    # checks. deploy-anmeldetool.sh re-tags the previous image as `latest` locally when a
+    # new one does not become healthy, so a reboot never starts a known-bad image.
+    image: ghcr.io/sebivtt/dpv-participant-management:latest
+    restart: unless-stopped
+    logging: *logging
+    depends_on:
+      - postgres
+    networks:
+      - dpv
+    # Secrets and settings, written by fetch-secrets.sh. The app's own list of settings
+    # is testumgebung/.env.example in its repo.
+    env_file: anmeldetool.env
+    environment:
+      # Fixed here, not in the env file, like in the app's testumgebung/docker-compose.yml:
+      # banner "Testumgebung", noindex, no developer error pages, mails only into the log.
+      # Remove it only together with the checks in docs/betrieb.md of the app repo.
+      TEST_ENVIRONMENT: "1"
+      POSTGRES_HOST: postgres
+      POSTGRES_PORT: "5432"
+    mem_limit: 512m
+    # No published port: Caddy reaches it as anmeldetool:8000 over the "dpv" network.
+    healthcheck:
+      # Same check as the app's own compose file: does the web server accept connections.
+      # start_period covers `migrate`, which runs before gunicorn starts (docker/start.sh).
+      test: ["CMD", "python", "-c", "import socket; socket.create_connection(('127.0.0.1', 8000), 3)"]
+      interval: 5s
+      timeout: 5s
+      retries: 36
+      start_period: 30s
+
+  anmeldetool-aufraeumen:
+    # Deletes expired sessions at start and then every 24 hours; Django never does
+    # (docker/aufraeumen.sh in the app repo). Same image and env file as the tool.
+    image: ghcr.io/sebivtt/dpv-participant-management:latest
+    # The image is pulled for the service above; this one must never trigger its own pull.
+    pull_policy: never
+    command: ["sh", "docker/aufraeumen.sh"]
+    restart: unless-stopped
+    logging: *logging
+    env_file: anmeldetool.env
+    environment:
+      TEST_ENVIRONMENT: "1"
+      POSTGRES_HOST: postgres
+      POSTGRES_PORT: "5432"
+    depends_on:
+      # Only once the tool is up: it brings the database to the latest migration.
+      anmeldetool:
+        condition: service_healthy
+    networks:
+      - dpv
+    # Passes the stop signal on to the script instead of waiting ten seconds for the sleep.
+    init: true
+    mem_limit: 256m
