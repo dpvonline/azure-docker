@@ -21,6 +21,9 @@ DOMAIN_CLOUD      = "cloud.scout-tools.de"  # Nextcloud-Testkopie; beim Cutover 
 DOMAIN_OFFICE     = "office.scout-tools.de" # Collabora; beim Cutover B auf office.dpvonline.de
 LETSENCRYPT_EMAIL = "cloudadmin@dpvonline.de"
 
+# Optional: DPV-Anmeldetool (Testumgebung). Ohne Wert bleibt es draußen; Ablauf: README, "Anmeldetool: Image-Pipeline"
+# DOMAIN_ANMELDETOOL = "anmeldetool.scout-tools.de" # Subdomain von scout-tools.de; dns.tf legt A/AAAA an
+
 UBUNTU_PRO_TOKEN = "C1abcDEFghiJKLmnoPQRstuVWXyz123"  # von ubuntu.com/pro, kostenloses Personal-Abo
 
 GITHUB_REPO_SSH_URL = "git@github.com:dpvonline/azure-docker.git"

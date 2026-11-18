@@ -179,3 +179,46 @@ resource "azurerm_key_vault_secret" "letsencrypt_email" {
   key_vault_id = azurerm_key_vault.core.id
   depends_on   = [azurerm_role_assignment.deployer_kv_officer]
 }
+
+# DPV Anmeldetool (docker-compose.anmeldetool.yml). Without DOMAIN_ANMELDETOOL none of this
+# is created and fetch-secrets.sh leaves the tool out of the stack.
+#
+# NOT created here: "anmeldetool-keycloak-client-secret". Keycloak generates the client
+# secret of the realm dpv-test; someone copies it into Key Vault (README).
+resource "random_password" "postgres_anmeldetool" {
+  count   = var.DOMAIN_ANMELDETOOL == null ? 0 : 1
+  length  = 32
+  special = false
+}
+
+# Django's SECRET_KEY, signs sessions and forms. Alphanumeric, like every password here:
+# fetch-secrets.sh writes it into an env file unquoted.
+resource "random_password" "anmeldetool_django_secret_key" {
+  count   = var.DOMAIN_ANMELDETOOL == null ? 0 : 1
+  length  = 64
+  special = false
+}
+
+resource "azurerm_key_vault_secret" "postgres_anmeldetool" {
+  count        = var.DOMAIN_ANMELDETOOL == null ? 0 : 1
+  name         = "postgres-anmeldetool-password"
+  value        = random_password.postgres_anmeldetool[0].result
+  key_vault_id = azurerm_key_vault.core.id
+  depends_on   = [azurerm_role_assignment.deployer_kv_officer]
+}
+
+resource "azurerm_key_vault_secret" "anmeldetool_django_secret_key" {
+  count        = var.DOMAIN_ANMELDETOOL == null ? 0 : 1
+  name         = "anmeldetool-django-secret-key"
+  value        = random_password.anmeldetool_django_secret_key[0].result
+  key_vault_id = azurerm_key_vault.core.id
+  depends_on   = [azurerm_role_assignment.deployer_kv_officer]
+}
+
+resource "azurerm_key_vault_secret" "domain_anmeldetool" {
+  count        = var.DOMAIN_ANMELDETOOL == null ? 0 : 1
+  name         = "domain-anmeldetool"
+  value        = var.DOMAIN_ANMELDETOOL
+  key_vault_id = azurerm_key_vault.core.id
+  depends_on   = [azurerm_role_assignment.deployer_kv_officer]
+}

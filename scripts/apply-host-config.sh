@@ -71,6 +71,7 @@ DOCKER_DROPIN_CHANGED=0
 UPDATE_TIMER_CHANGED=0
 PRUNE_TIMER_CHANGED=0
 KCPRUNE_TIMER_CHANGED=0
+DEPLOY_TIMER_CHANGED=0
 REBOOT_TIMER_CHANGED=0
 APT_TIMER_DROPIN_CHANGED=0
 JOURNALD_CHANGED=0
@@ -146,6 +147,10 @@ sync_file systemd/dpv-confluence-prune.service  /etc/systemd/system/dpv-confluen
 sync_file systemd/dpv-confluence-prune.timer    /etc/systemd/system/dpv-confluence-prune.timer    && { NEED_RELOAD=1; PRUNE_TIMER_CHANGED=1; }
 sync_file systemd/dpv-keycloak-prune.service   /etc/systemd/system/dpv-keycloak-prune.service   && NEED_RELOAD=1
 sync_file systemd/dpv-keycloak-prune.timer     /etc/systemd/system/dpv-keycloak-prune.timer     && { NEED_RELOAD=1; KCPRUNE_TIMER_CHANGED=1; }
+# Rolls out new Anmeldetool images from GHCR every 5 minutes (deploy-anmeldetool.sh);
+# does nothing while docker-compose.anmeldetool.yml is not part of the stack.
+sync_file systemd/dpv-anmeldetool-deploy.service /etc/systemd/system/dpv-anmeldetool-deploy.service && NEED_RELOAD=1
+sync_file systemd/dpv-anmeldetool-deploy.timer  /etc/systemd/system/dpv-anmeldetool-deploy.timer  && { NEED_RELOAD=1; DEPLOY_TIMER_CHANGED=1; }
 sync_file systemd/dpv-reboot-if-required.service /etc/systemd/system/dpv-reboot-if-required.service && NEED_RELOAD=1
 sync_file systemd/dpv-reboot-if-required.timer  /etc/systemd/system/dpv-reboot-if-required.timer  && { NEED_RELOAD=1; REBOOT_TIMER_CHANGED=1; }
 
@@ -239,6 +244,7 @@ fi
 activate_timer dpv-update.timer "$UPDATE_TIMER_CHANGED"
 activate_timer dpv-confluence-prune.timer "$PRUNE_TIMER_CHANGED"
 activate_timer dpv-keycloak-prune.timer "$KCPRUNE_TIMER_CHANGED"
+activate_timer dpv-anmeldetool-deploy.timer "$DEPLOY_TIMER_CHANGED"
 activate_timer dpv-reboot-if-required.timer "$REBOOT_TIMER_CHANGED"
 
 if [ "$APT_TIMER_DROPIN_CHANGED" = 1 ]; then

@@ -19,3 +19,8 @@ CREATE DATABASE confluence OWNER confluence
 
 CREATE USER nextcloud WITH PASSWORD '__POSTGRES_NEXTCLOUD_PASSWORD__';
 CREATE DATABASE nextcloud OWNER nextcloud ENCODING 'UTF8' TEMPLATE template0;
+
+-- DPV-Anmeldetool. On an already initialised cluster this file never runs again;
+-- scripts/deploy-anmeldetool.sh creates the same role and database idempotently.
+CREATE USER anmeldetool WITH PASSWORD '__POSTGRES_ANMELDETOOL_PASSWORD__';
+CREATE DATABASE anmeldetool OWNER anmeldetool ENCODING 'UTF8' TEMPLATE template0;

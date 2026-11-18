@@ -1,0 +1,10 @@
+[Unit]
+Description=Check for a new Anmeldetool image every 5 minutes
+
+[Timer]
+OnBootSec=3min
+# Measured from the end of the previous run, so a long deploy never overlaps the next one.
+OnUnitInactiveSec=5min
+
+[Install]
+WantedBy=timers.target

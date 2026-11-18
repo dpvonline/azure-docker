@@ -664,6 +664,87 @@ Container neu (ihre `logging`-Konfiguration hat sich geändert), auch Postgres u
 Confluence — ein paar Minuten Ausfall um 03:30 UTC. Caddy liest dabei das neue
 Caddyfile. Die bisherigen json-Logs verschwinden mit den alten Containern.
 
+## Anmeldetool: Image-Pipeline
+
+Das DPV-Anmeldetool ([sebivtt/dpv-participant-management](https://github.com/sebivtt/dpv-participant-management),
+Django, Testumgebung mit `TEST_ENVIRONMENT=1`) läuft als zusätzlicher Compose-Dienst
+(`compose/docker-compose.anmeldetool.yml`) neben Keycloak und Confluence, mit der gemeinsamen
+Postgres-Instanz und einer eigenen Caddy-Route.
+
+```
+PR gemerged → "Prüfungen" auf main grün → Workflow "Abbild veröffentlichen" (App-Repo)
+  → ghcr.io/sebivtt/dpv-participant-management:<Version>, :sha-<Commit>, :latest (linux/arm64)
+  → dpv-anmeldetool-deploy.timer (alle 5 Minuten, auf der VM) → scripts/deploy-anmeldetool.sh
+  → Version aus "latest" lesen, genau diese Version holen, Neustart, Healthcheck, bei Fehler Rollback
+```
+
+**Versionen.** Jeder Merge bekommt `JJJJ.MM.TT-<Laufnummer>`, z. B. `2026.11.18-42` (UTC-Datum und
+Laufnummer des Workflows, aufsteigend und eindeutig). Das Image trägt sie als Label
+`org.opencontainers.image.version`. `latest` ist nur ein Zeiger auf die neueste Version; der Server
+startet nie `latest`, sondern immer eine feste Version (`ANMELDETOOL_VERSION`). Welche läuft, steht
+in `/var/lib/dpv/anmeldetool-version` und in `compose/.env`; `fetch-secrets.sh` schreibt sie nach
+einem Neustart der VM zurück. Ein Rollback ist damit einfach die vorherige Version, und ein Reboot
+oder der wöchentliche Update-Lauf startet nie ein anderes Abbild als das, das zuletzt gesund war.
+
+**Warum Pull statt Push.** SSH ist nur aus `ADMIN_IP_CIDRS` offen (`terraform/network.tf`), GitHub
+Actions hat keine feste Adresse. Die VM holt das Abbild deshalb selbst; es wird kein Port geöffnet.
+Ein Merge ist spätestens nach rund 5 Minuten (Build + Timer) live.
+
+**Was wo passiert.** In `compose/docker-compose.anmeldetool.yml`: Der einmalige Dienst
+`anmeldetool-db-init` legt Rolle und Datenbank `anmeldetool` in der gemeinsamen Postgres an
+(idempotent; `init-db.sql` läuft auf dem bestehenden Cluster nicht mehr) und gleicht das Passwort
+mit Key Vault ab. Die Migrationen führt das Tool selbst beim Start aus (`docker/start.sh` im Image),
+sie zählen also zum Healthcheck. Das Skript entscheidet nur, welche Version läuft.
+
+**Was `deploy-anmeldetool.sh` tut** (Ablauf wie `update-containers.sh`):
+
+1. Ist `latest` dieselbe Version wie die laufende, oder ist der Dienst nicht Teil des Stacks: still
+   beenden. Während `dpv-update.service` läuft, setzt es aus.
+2. Neue Version genau holen (`:<Version>`).
+3. Vor einem Update über eine laufende Version: inkrementelles pgBackRest-Backup. Schlägt es fehl,
+   bleibt alles, wie es ist.
+4. `docker compose up -d` mit der neuen Version, dann bis zu 4 Minuten auf `healthy` warten. Erst
+   danach wird sie als laufende Version gespeichert.
+5. Nicht gesund: die vorherige Version wird wieder gestartet; die schlechte wird in
+   `/var/lib/dpv/anmeldetool-failed-version` gemerkt, damit nicht alle 5 Minuten derselbe
+   Fehlversuch läuft. Erst eine neuere Version löst den nächsten Versuch aus. Die Unit endet dann
+   rot (`systemctl --failed`), Details in `/var/log/dpv-update.log`.
+
+**Grenzen.** Ein Rollback macht Datenbank-Migrationen nicht rückgängig; die Sicherung aus Schritt 3
+ist der Weg zurück, falls ein Schema nicht abwärtskompatibel war. Eine bestimmte Version von Hand
+starten: `ANMELDETOOL_VERSION=<Version> docker compose up -d anmeldetool anmeldetool-aufraeumen`
+(der Timer stellt sie beim nächsten neuen `latest` wieder um).
+
+### Einmalig einrichten
+
+1. **App-Repo** (Schreibrechte nötig): `docs/anmeldetool/abbild-veroeffentlichen.yml` aus diesem
+   Repo als `.github/workflows/abbild-veroeffentlichen.yml` per Pull Request übernehmen. Nach dem
+   ersten Lauf unter *Packages → dpv-participant-management → Package settings → Change visibility*
+   auf **Public** stellen (Pakete beginnen privat). Bleibt es privat, braucht die VM einmalig
+   `docker login ghcr.io` (Token mit `read:packages`).
+2. **Terraform**: `DOMAIN_ANMELDETOOL = "anmeldetool.scout-tools.de"` in `terraform.tfvars` setzen
+   (muss eine Subdomain von `scout-tools.de` sein), `terraform apply`. Das legt die DNS-Einträge
+   (A und AAAA, `terraform/dns.tf`) und in Key Vault `domain-anmeldetool`,
+   `postgres-anmeldetool-password` und `anmeldetool-django-secret-key` an.
+3. **Keycloak**: Realm `dpv-test` anlegen und den Client `dpv-anmeldetool` auf die Domain einstellen
+   (Schritte K1 bis K5 im README des App-Repos, Abschnitt "Test-Realm im Keycloak des DPV"). Das
+   Client-Secret danach direkt in Key Vault ablegen, nicht in Chat oder Issue:
+   ```bash
+   az keyvault secret set --vault-name <vault> --name anmeldetool-keycloak-client-secret --value '<Secret aus Keycloak>'
+   ```
+4. **VM**: erst wenn alle vier Secrets existieren, nimmt `fetch-secrets.sh` den Dienst in den Stack
+   auf. Auf der VM:
+   ```bash
+   sudo /opt/dpv/scripts/fetch-secrets.sh <vault>
+   sudo systemctl restart dpv-compose.service   # Caddy bekommt die neue Domain
+   sudo systemctl start dpv-anmeldetool-deploy.service   # erster Deploy, danach alle 5 Minuten
+   ```
+   `apply-host-config.sh` hat den Timer mit dem nächsten `git pull` (oder sofort per
+   `sudo /opt/dpv/scripts/apply-host-config.sh`) installiert.
+
+Prüfen: `systemctl list-timers dpv-anmeldetool-deploy.timer`, `docker compose ps`, Log in
+`/var/log/dpv-update.log`, Tool-Log mit `journalctl -t dpv-core-anmeldetool-1`.
+
 ## Speicher (Limits, zram)
 
 Am 11.11.2026 ging der VM der RAM aus: 151 Apache-Worker von Nextcloud neben Postgres,

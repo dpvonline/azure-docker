@@ -1,0 +1,91 @@
+# Gehört in das Repo sebivtt/dpv-participant-management, nach
+# .github/workflows/abbild-veroeffentlichen.yml (nicht in dieses Repo: hier liegt nur die
+# Vorlage, siehe README, Abschnitt "Anmeldetool: Image-Pipeline").
+#
+# Baut nach jedem grünen Lauf von "Prüfungen" auf main das Container-Abbild und legt es in der
+# GitHub Container Registry ab. Auf dem Server liest dpv-anmeldetool-deploy.timer aus "latest"
+# die Version (Label org.opencontainers.image.version), holt genau diese Version und startet sie
+# (scripts/deploy-anmeldetool.sh im Repo dpvonline/azure-docker). Der Server läuft immer auf einer
+# festen Version, nie auf "latest"; "latest" zeigt nur auf die neueste.
+#
+# Warum workflow_run statt "on: push": So wird nur ein Stand veröffentlicht, dessen Prüfungen
+# (ci.yml) grün sind, und es wird genau der geprüfte Commit gebaut. Ein Merge mit roter
+# Prüfung erreicht den Server nie.
+name: Abbild veröffentlichen
+
+on:
+  workflow_run:
+    workflows: ["Prüfungen"]
+    types: [completed]
+    branches: [main]
+
+permissions:
+  contents: read
+
+# Nie abbrechen: Ein halb hochgeladenes Abbild wäre schlimmer als ein wartender Lauf. Zwei Merges
+# kurz hintereinander laufen nacheinander, der spätere gewinnt bei "latest".
+concurrency:
+  group: abbild-veroeffentlichen
+  cancel-in-progress: false
+
+env:
+  ABBILD: ghcr.io/${{ github.repository }}
+
+jobs:
+  bauen:
+    name: Abbild bauen und nach GHCR hochladen
+    # Nur nach einem grünen Push-Lauf auf main, nie nach einem Pull Request (auch nicht aus einem Fork).
+    if: >-
+      github.event.workflow_run.conclusion == 'success' &&
+      github.event.workflow_run.event == 'push' &&
+      github.event.workflow_run.head_branch == 'main'
+    # Der Server ist ARM64 (Standard_D4ps_v6). Der ARM-Runner baut das native, ohne Emulation;
+    # für öffentliche Repos kostenlos.
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 20
+    permissions:
+      contents: read
+      # Nur hier darf der Lauf ins Paketverzeichnis schreiben; der Prüf-Workflow bleibt bei "read".
+      packages: write
+    steps:
+      - uses: actions/checkout@v7.0.1
+        with:
+          # Genau der Stand, dessen Prüfungen grün waren, auch wenn main inzwischen weiter ist.
+          ref: ${{ github.event.workflow_run.head_sha }}
+          persist-credentials: false
+      - uses: docker/setup-buildx-action@v4.4.1
+      - uses: docker/login-action@v4.8.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      # Version je Merge: Datum (UTC) und Laufnummer dieses Workflows, z. B. 2026.11.18-42. Die
+      # Laufnummer steigt mit jedem Lauf, die Versionen sind also eindeutig und aufsteigend.
+      - id: version
+        run: echo "version=$(date -u +%Y.%m.%d)-${{ github.run_number }}" >> "$GITHUB_OUTPUT"
+      - id: meta
+        uses: docker/metadata-action@v6.2.0
+        with:
+          images: ${{ env.ABBILD }}
+          # <Version>: das, was der Server startet; wird nie überschrieben.
+          # sha-<Commit>: zum Nachvollziehen, welcher Stand in welcher Version steckt.
+          # latest: nur ein Zeiger auf die neueste Version, den der Server abfragt.
+          tags: |
+            type=raw,value=${{ steps.version.outputs.version }}
+            type=sha,format=long
+            type=raw,value=latest
+          # Die Version steht im Abbild selbst; daran erkennt der Server, welche Version "latest" ist.
+          labels: |
+            org.opencontainers.image.version=${{ steps.version.outputs.version }}
+      - uses: docker/build-push-action@v7.4.0
+        with:
+          context: .
+          push: true
+          platforms: linux/arm64
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          # Ein einfaches Abbild ohne zusätzlichen Beglaubigungs-Eintrag, damit "docker pull" auf
+          # dem Server ein einziges Manifest sieht.
+          provenance: false
+          cache-from: type=gha
+          cache-to: type=gha,mode=max

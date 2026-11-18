@@ -17,6 +17,7 @@ backend.hcl
 
 # Runtime secrets rendered on the VM, never meant for git
 compose/.env
+compose/anmeldetool.env
 compose/init-db.sql
 compose/postgres/pgbackrest.conf
 
