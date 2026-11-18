@@ -41,6 +41,24 @@
 
 {$DOMAIN_AUTH} {
 	import ratelimit auth 300
+	# Self-registration form submissions. A person submits this once, maybe two
+	# or three times after fixing a typo; a bot posts it in bulk (about 1000
+	# fake accounts accumulated by November 2026, see
+	# scripts/keycloak-prune-unverified.sh). Counts only POSTs, so loading the
+	# form is not limited. Per IP only: bots spread over many addresses get
+	# through, the CAPTCHA in the registration flow is what stops those.
+	@registration {
+		method POST
+		path /realms/*/login-actions/registration
+		not remote_ip private_ranges
+	}
+	rate_limit @registration {
+		zone registration {
+			key {remote_host}
+			events 5
+			window 10m
+		}
+	}
 	import access_log
 	reverse_proxy keycloak:8080
 }
